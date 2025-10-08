@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Bundle Identifier -->
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    
+    <!-- Bundle Name -->
+    <key>CFBundleName</key>
+    <string>$(PRODUCT_NAME)</string>
+    
+    <!-- Bundle Display Name -->
+    <key>CFBundleDisplayName</key>
+    <string>Muze</string>
+    
+    <!-- Bundle Version -->
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    
+    <!-- Bundle Short Version -->
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    
+    <!-- Bundle Executable -->
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    
+    <!-- Bundle Package Type -->
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    
+    <!-- Launch Storyboard (not needed for SwiftUI but good to have) -->
+    <key>UILaunchStoryboardName</key>
+    <string>LaunchScreen</string>
+    
+    <!-- Required Device Capabilities -->
+    <key>UIRequiredDeviceCapabilities</key>
+    <array>
+        <string>arm64</string>
+    </array>
+    
+    <!-- Supported Interface Orientations -->
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+    
+    <!-- Music Library Access -->
+    <key>NSAppleMusicUsageDescription</key>
+    <string>Muze needs access to your music library to play local audio files</string>
+    
+    <!-- Background Audio -->
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>audio</string>
+    </array>
+    
+    <!-- Spotify URL Scheme -->
+    <key>LSApplicationQueriesSchemes</key>
+    <array>
+        <string>spotify</string>
+    </array>
+    
+    <!-- URL Types for Spotify OAuth callback -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>muze</string>
+            </array>
+            <key>CFBundleURLName</key>
+            <string>com.muze.auth</string>
+        </dict>
+    </array>
+    
+    <!-- iCloud Configuration -->
+    <!-- Note: In Xcode, you'll need to:
+         1. Enable iCloud capability in Signing & Capabilities
+         2. Enable "iCloud Documents" service
+         3. Add container (or use default)
+    -->
+    <key>NSUbiquitousContainers</key>
+    <dict>
+        <key>iCloud.$(CFBundleIdentifier)</key>
+        <dict>
+            <key>NSUbiquitousContainerIsDocumentScopePublic</key>
+            <true/>
+            <key>NSUbiquitousContainerName</key>
+            <string>Muze</string>
+            <key>NSUbiquitousContainerSupportedFolderLevels</key>
+            <string>Any</string>
+        </dict>
+    </dict>
+</dict>
+</plist>
+

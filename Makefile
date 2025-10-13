@@ -1,7 +1,7 @@
 # Makefile for Muze iOS App
 # Makes it easy to build, run, and manage the project from command line
 
-.PHONY: help setup generate clean build run test archive install-tools
+.PHONY: help setup generate clean build run test archive install-tools add-music add-music-local
 
 # Default target
 help:
@@ -16,6 +16,10 @@ help:
 	@echo "  make clean          - Clean build artifacts"
 	@echo "  make archive        - Create release archive"
 	@echo "  make install-tools  - Install XcodeGen and other tools"
+	@echo ""
+	@echo "Testing & Development:"
+	@echo "  make add-music       - Add test music to iCloud Drive (simulator)"
+	@echo "  make add-music-local - Add test music to local storage (simulator)"
 	@echo ""
 
 # Install required command-line tools
@@ -138,4 +142,12 @@ validate:
 	@echo "✅ Validating project configuration..."
 	@xcodegen generate --spec project.yml --use-cache false
 	@echo "✅ Configuration is valid"
+
+# Add test music files to simulator's iCloud Drive
+add-music:
+	@./scripts/add-test-music.sh
+
+# Add test music files to simulator's local storage (for testing without iCloud)
+add-music-local:
+	@./scripts/add-test-music-local.sh
 

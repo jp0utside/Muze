@@ -71,19 +71,15 @@ class LocalAudioService: NSObject, AVAudioPlayerDelegate {
         stop()
         currentFileURL = url
         
-        AppLogger.logLocalAudio("Starting playback for: \(url.lastPathComponent)")
+        AppLogger.logLocalAudio("▶️ Starting playback for: \(url.lastPathComponent)")
         
-        // Check if this is an iCloud file
-        if url.path.contains("Mobile Documents") || url.path.contains("iCloud") {
-            // iCloud file - ensure it's downloaded first
-            do {
-                AppLogger.logLocalAudio("iCloud file detected, checking download status...")
-                try await iCloudManager.downloadFileIfNeeded(url)
-                AppLogger.logLocalAudio("File ready for playback")
-            } catch {
-                AppLogger.logLocalAudio("Failed to download iCloud file: \(error)", level: .error)
-                return
-            }
+        // Ensure file is available (downloads from iCloud if needed, or verifies local file exists)
+        do {
+            try await iCloudManager.downloadFileIfNeeded(url)
+            AppLogger.logLocalAudio("✓ File ready for playback")
+        } catch {
+            AppLogger.logLocalAudio("❌ File not available: \(error)", level: .error)
+            return
         }
         
         // Play the file

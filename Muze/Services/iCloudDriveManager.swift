@@ -9,7 +9,8 @@ import Foundation
 import AVFoundation
 import Combine
 
-/// Manages access to audio files stored in iCloud Drive
+/// Manages access to audio files stored in iCloud Drive or local Documents directory
+/// Falls back to local storage when iCloud is unavailable
 @MainActor
 class iCloudDriveManager: ObservableObject {
     // MARK: - Properties
@@ -18,6 +19,7 @@ class iCloudDriveManager: ObservableObject {
     @Published private(set) var isScanning: Bool = false
     @Published private(set) var discoveredFiles: [URL] = []
     @Published private(set) var syncStatus: iCloudSyncStatus = .unknown
+    @Published private(set) var usingLocalStorage: Bool = false
     
     private let fileManager = FileManager.default
     private var metadataQuery: NSMetadataQuery?
@@ -44,11 +46,13 @@ class iCloudDriveManager: ObservableObject {
         if let _ = fileManager.ubiquityIdentityToken {
             isAvailable = true
             syncStatus = .available
-            AppLogger.logLocalAudio("iCloud Drive is available")
+            usingLocalStorage = false
+            AppLogger.logLocalAudio("✅ iCloud Drive is available")
         } else {
             isAvailable = false
             syncStatus = .unavailable
-            AppLogger.logLocalAudio("iCloud Drive is not available", level: .warning)
+            usingLocalStorage = true
+            AppLogger.logLocalAudio("⚠️ iCloud Drive not available - using local storage fallback", level: .warning)
         }
     }
     
@@ -62,15 +66,26 @@ class iCloudDriveManager: ObservableObject {
         return nil
     }
     
-    /// Returns the URL to the Muze music folder in iCloud Drive
+    /// Returns the URL to the local app Documents directory
+    var localDocumentsURL: URL? {
+        fileManager.urls(for: .documentDirectory, in: .userDomainMask).first
+    }
+    
+    /// Returns the URL to the Muze music folder (iCloud or local)
     var muzeMusicFolderURL: URL? {
-        guard let documentsURL = iCloudDocumentsURL else { return nil }
-        return documentsURL.appendingPathComponent("Muze/Music")
+        if isAvailable, let iCloudDocs = iCloudDocumentsURL {
+            // Use iCloud when available
+            return iCloudDocs.appendingPathComponent("Muze/Music")
+        } else if let localDocs = localDocumentsURL {
+            // Fall back to local Documents
+            return localDocs.appendingPathComponent("Muze/Music")
+        }
+        return nil
     }
     
     // MARK: - Folder Setup
     
-    /// Creates the Muze music folder in iCloud Drive if it doesn't exist
+    /// Creates the Muze music folder if it doesn't exist (iCloud or local)
     func createMuzeMusicFolderIfNeeded() async throws {
         guard let folderURL = muzeMusicFolderURL else {
             throw iCloudError.notAvailable
@@ -82,13 +97,14 @@ class iCloudDriveManager: ObservableObject {
                 withIntermediateDirectories: true,
                 attributes: nil
             )
-            AppLogger.logLocalAudio("Created Muze music folder in iCloud Drive")
+            let storageType = usingLocalStorage ? "local storage" : "iCloud Drive"
+            AppLogger.logLocalAudio("📁 Created Muze music folder in \(storageType): \(folderURL.path)")
         }
     }
     
     // MARK: - File Discovery
     
-    /// Scans iCloud Drive for audio files
+    /// Scans for audio files (iCloud Drive or local storage)
     func scanForAudioFiles() async throws -> [URL] {
         guard let musicFolderURL = muzeMusicFolderURL else {
             throw iCloudError.notAvailable
@@ -123,13 +139,20 @@ class iCloudDriveManager: ObservableObject {
         }
         
         discoveredFiles = audioFiles
-        AppLogger.logLocalAudio("Found \(audioFiles.count) audio files in iCloud Drive")
+        let storageType = usingLocalStorage ? "local storage" : "iCloud Drive"
+        AppLogger.logLocalAudio("🔍 Found \(audioFiles.count) audio files in \(storageType)")
         
         return audioFiles
     }
     
-    /// Checks if a file is downloaded from iCloud
+    /// Checks if a file is downloaded from iCloud (local files are always available)
     func isFileDownloaded(_ url: URL) -> Bool {
+        // If using local storage, file is always "downloaded" (it's local)
+        if usingLocalStorage {
+            return fileManager.fileExists(atPath: url.path)
+        }
+        
+        // Check iCloud download status
         guard let values = try? url.resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey]) else {
             return false
         }
@@ -141,8 +164,17 @@ class iCloudDriveManager: ObservableObject {
         return false
     }
     
-    /// Downloads a file from iCloud if not already downloaded
+    /// Downloads a file from iCloud if not already downloaded (no-op for local files)
     func downloadFileIfNeeded(_ url: URL) async throws {
+        // If using local storage, files are already local - no download needed
+        if usingLocalStorage {
+            if !fileManager.fileExists(atPath: url.path) {
+                throw iCloudError.downloadFailed
+            }
+            return
+        }
+        
+        // For iCloud files, check if download is needed
         guard isAvailable else {
             throw iCloudError.notAvailable
         }
@@ -157,11 +189,17 @@ class iCloudDriveManager: ObservableObject {
         
         // Wait for download to complete
         // In a real implementation, you'd want to monitor download progress
-        AppLogger.logLocalAudio("Started downloading file: \(url.lastPathComponent)")
+        AppLogger.logLocalAudio("⬇️ Started downloading file: \(url.lastPathComponent)")
     }
     
-    /// Gets download progress for a file (0.0 to 1.0)
+    /// Gets download progress for a file (0.0 to 1.0) - local files are always 1.0
     func downloadProgress(for url: URL) -> Double? {
+        // Local files are always fully available
+        if usingLocalStorage {
+            return fileManager.fileExists(atPath: url.path) ? 1.0 : 0.0
+        }
+        
+        // Check iCloud download progress
         guard let values = try? url.resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey, .ubiquitousItemDownloadingErrorKey]) else {
             return nil
         }
@@ -256,7 +294,7 @@ class iCloudDriveManager: ObservableObject {
     
     // MARK: - File Operations
     
-    /// Copies a file to the Muze music folder in iCloud Drive
+    /// Copies a file to the Muze music folder (iCloud or local storage)
     func importFile(from sourceURL: URL) async throws -> URL {
         guard let musicFolderURL = muzeMusicFolderURL else {
             throw iCloudError.notAvailable
@@ -268,23 +306,25 @@ class iCloudDriveManager: ObservableObject {
         let destinationURL = musicFolderURL.appendingPathComponent(fileName)
         
         // Copy the file
+        let storageType = usingLocalStorage ? "local storage" : "iCloud Drive"
         if fileManager.fileExists(atPath: destinationURL.path) {
             // File already exists, create a unique name
             let uniqueURL = try generateUniqueURL(for: destinationURL)
             try fileManager.copyItem(at: sourceURL, to: uniqueURL)
-            AppLogger.logLocalAudio("Imported file to iCloud Drive: \(uniqueURL.lastPathComponent)")
+            AppLogger.logLocalAudio("📥 Imported file to \(storageType): \(uniqueURL.lastPathComponent)")
             return uniqueURL
         } else {
             try fileManager.copyItem(at: sourceURL, to: destinationURL)
-            AppLogger.logLocalAudio("Imported file to iCloud Drive: \(fileName)")
+            AppLogger.logLocalAudio("📥 Imported file to \(storageType): \(fileName)")
             return destinationURL
         }
     }
     
-    /// Deletes a file from iCloud Drive
+    /// Deletes a file (from iCloud or local storage)
     func deleteFile(at url: URL) async throws {
         try fileManager.removeItem(at: url)
-        AppLogger.logLocalAudio("Deleted file from iCloud Drive: \(url.lastPathComponent)")
+        let storageType = usingLocalStorage ? "local storage" : "iCloud Drive"
+        AppLogger.logLocalAudio("🗑️ Deleted file from \(storageType): \(url.lastPathComponent)")
     }
     
     private func generateUniqueURL(for url: URL) throws -> URL {

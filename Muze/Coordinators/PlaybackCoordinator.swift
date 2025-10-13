@@ -277,10 +277,12 @@ class PlaybackCoordinator: ObservableObject {
         
         Task { @MainActor in
             do {
+                // authorizeAndPlayURI will handle connection if needed
                 try await spotifyService.play(spotifyURI: spotifyURI)
                 AppLogger.logPlayback("Spotify playback started")
             } catch {
-                AppLogger.logPlayback("Failed to play Spotify track: \(error)", level: .error)
+                AppLogger.logPlayback("Failed to play Spotify track: \(error.localizedDescription)", level: .error)
+                AppLogger.logPlayback("Make sure Spotify app is installed and you're logged in with Premium.", level: .error)
                 isPlaying = false
             }
         }

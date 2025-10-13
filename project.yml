@@ -4,7 +4,7 @@
 
 name: Muze
 options:
-  bundleIdPrefix: com.muze
+  bundleIdPrefix: com.jpw
   deploymentTarget:
     iOS: "17.0"
   developmentLanguage: en
@@ -37,7 +37,7 @@ targets:
     settings:
       base:
         PRODUCT_NAME: Muze
-        PRODUCT_BUNDLE_IDENTIFIER: com.muze.app
+        PRODUCT_BUNDLE_IDENTIFIER: com.jpw.muze
         INFOPLIST_FILE: Muze/Info.plist
         CODE_SIGN_ENTITLEMENTS: Muze/Muze.entitlements
         DEVELOPMENT_TEAM: ""  # Update this with your team ID

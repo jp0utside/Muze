@@ -14,13 +14,15 @@ let package = Package(
         )
     ],
     dependencies: [
-        // Add Spotify SDK when ready
-        // .package(url: "https://github.com/spotify/ios-sdk", from: "1.2.0")
+        // Spotify iOS SDK (App Remote for playback control)
+        .package(url: "https://github.com/spotify/ios-sdk", from: "2.1.6")
     ],
     targets: [
         .target(
             name: "Muze",
-            dependencies: [],
+            dependencies: [
+                .product(name: "SpotifyiOS", package: "ios-sdk")
+            ],
             path: "Muze",
             exclude: [
                 "Info.plist"

@@ -260,6 +260,49 @@ class PlaylistManager: ObservableObject {
         return track
     }
     
+    // MARK: - Spotify Integration
+    
+    /// Import tracks from Spotify liked songs
+    func importSpotifyLikedSongs(
+        spotifyService: SpotifyService,
+        progressCallback: ((Int, Int) -> Void)? = nil
+    ) async throws -> Int {
+        var importedCount = 0
+        var totalCount = 0
+        
+        // Get all saved tracks from Spotify
+        let spotifyTracks = try await spotifyService.getAllSavedTracks { count in
+            totalCount = count
+            Task { @MainActor in
+                progressCallback?(importedCount, totalCount)
+            }
+        }
+        
+        totalCount = spotifyTracks.count
+        
+        // Convert and import each track
+        for spotifyTrack in spotifyTracks {
+            // Check if we already have this track
+            let existingTrack = allTracks.first { track in
+                track.spotifyURI == spotifyTrack.uri
+            }
+            
+            if existingTrack == nil {
+                // Convert to Track model and add
+                let track = spotifyTrack.toTrack()
+                addTrack(track)
+                importedCount += 1
+                
+                await MainActor.run {
+                    progressCallback?(importedCount, totalCount)
+                }
+            }
+        }
+        
+        AppLogger.logPlaylist("Imported \(importedCount) new tracks from Spotify (\(spotifyTracks.count) total)")
+        return importedCount
+    }
+    
     // MARK: - Search
     
     func searchTracks(query: String) -> [Track] {

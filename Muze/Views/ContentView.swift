@@ -32,6 +32,12 @@ struct ContentView: View {
                     Label("Search", systemImage: "magnifyingglass")
                 }
                 .tag(2)
+            
+            SettingsView()
+                .tabItem {
+                    Label("Settings", systemImage: "gear")
+                }
+                .tag(3)
         }
         .safeAreaInset(edge: .bottom) {
             if playbackCoordinator.currentTrack != nil {

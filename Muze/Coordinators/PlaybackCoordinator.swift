@@ -26,6 +26,7 @@ class PlaybackCoordinator: ObservableObject {
     
     private var localAudioService: LocalAudioService
     private var spotifyService: SpotifyService
+    private var spotifyAuthManager: SpotifyAuthManager
     private var iCloudManager: iCloudDriveManager
     
     // MARK: - Private Properties
@@ -39,9 +40,26 @@ class PlaybackCoordinator: ObservableObject {
         let iCloudMgr = Muze.iCloudDriveManager()
         self.iCloudManager = iCloudMgr
         self.localAudioService = LocalAudioService(iCloudManager: iCloudMgr)
-        self.spotifyService = SpotifyService()
+        
+        // Initialize Spotify authentication
+        self.spotifyAuthManager = SpotifyAuthManager(
+            clientID: Constants.Spotify.clientID,
+            redirectURI: Constants.Spotify.redirectURI,
+            scopes: Constants.Spotify.scopes
+        )
+        self.spotifyService = SpotifyService(authManager: spotifyAuthManager)
         
         setupServices()
+    }
+    
+    // MARK: - Public Access to Spotify Services
+    
+    var spotifyAuth: SpotifyAuthManager {
+        spotifyAuthManager
+    }
+    
+    var spotify: SpotifyService {
+        spotifyService
     }
     
     private func setupServices() {
@@ -58,10 +76,32 @@ class PlaybackCoordinator: ObservableObject {
             }
         }
         
+        // Set up Spotify service callbacks
+        spotifyService.onPlaybackFinished = { [weak self] in
+            Task { @MainActor in
+                self?.handleTrackCompletion()
+            }
+        }
+        
+        spotifyService.onTimeUpdate = { [weak self] time in
+            Task { @MainActor in
+                self?.currentTime = time
+            }
+        }
+        
+        spotifyService.onError = { error in
+            AppLogger.logPlayback("Spotify error: \(error.localizedDescription)", level: .error)
+        }
+        
+        // Connect to Spotify if authenticated
+        if spotifyAuthManager.isAuthenticated {
+            spotifyService.connect()
+        }
+        
         // Start monitoring iCloud Drive for file changes
         iCloudManager.startMonitoring()
         
-        AppLogger.logPlayback("PlaybackCoordinator initialized with iCloud Drive support")
+        AppLogger.logPlayback("PlaybackCoordinator initialized with iCloud Drive and Spotify support")
     }
     
     // MARK: - Playback Control
@@ -86,7 +126,13 @@ class PlaybackCoordinator: ObservableObject {
         case .local:
             localAudioService.pause()
         case .spotify:
-            spotifyService.pause()
+            Task {
+                do {
+                    try await spotifyService.pause()
+                } catch {
+                    AppLogger.logPlayback("Failed to pause Spotify: \(error)", level: .error)
+                }
+            }
         case .none:
             break
         }
@@ -125,7 +171,14 @@ class PlaybackCoordinator: ObservableObject {
         case .local:
             localAudioService.seek(to: time)
         case .spotify:
-            spotifyService.seek(to: time)
+            let positionMs = Int(time * 1000)
+            Task {
+                do {
+                    try await spotifyService.seek(to: positionMs)
+                } catch {
+                    AppLogger.logPlayback("Failed to seek in Spotify: \(error)", level: .error)
+                }
+            }
         case .none:
             break
         }
@@ -215,9 +268,22 @@ class PlaybackCoordinator: ObservableObject {
     }
     
     private func playSpotifyTrack(_ track: Track) {
-        print("Playing Spotify track: \(track.title)")
-        // SpotifyService implementation will go here
-        // For now, just simulate playback
+        guard let spotifyURI = track.spotifyURI else {
+            AppLogger.logPlayback("Cannot play Spotify track: missing URI", level: .error)
+            return
+        }
+        
+        AppLogger.logPlayback("Playing Spotify track: \(track.title) (\(spotifyURI))")
+        
+        Task { @MainActor in
+            do {
+                try await spotifyService.play(spotifyURI: spotifyURI)
+                AppLogger.logPlayback("Spotify playback started")
+            } catch {
+                AppLogger.logPlayback("Failed to play Spotify track: \(error)", level: .error)
+                isPlaying = false
+            }
+        }
     }
     
     private func resumePlayback() {
@@ -227,7 +293,16 @@ class PlaybackCoordinator: ObservableObject {
         case .local:
             localAudioService.resume()
         case .spotify:
-            spotifyService.resume()
+            Task {
+                do {
+                    try await spotifyService.resume()
+                } catch {
+                    AppLogger.logPlayback("Failed to resume Spotify: \(error)", level: .error)
+                    await MainActor.run {
+                        isPlaying = false
+                    }
+                }
+            }
         case .none:
             break
         }
@@ -236,7 +311,7 @@ class PlaybackCoordinator: ObservableObject {
     private func stopCurrentPlayback() {
         isPlaying = false
         localAudioService.stop()
-        spotifyService.stop()
+        // Spotify doesn't need explicit stop, just disconnect when switching tracks
     }
     
     // MARK: - iCloud Drive Access

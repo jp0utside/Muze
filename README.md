@@ -61,7 +61,7 @@ Muze/
 
 ### ✅ Completed
 - Clean architecture with MVVM + Coordinator pattern
-- Complete SwiftUI interface (10+ views)
+- Complete SwiftUI interface (11 views)
 - Data models (Track, Playlist, TrackSource, PlaybackQueue)
 - **iCloud Drive integration with auto-discovery** ✨
 - **On-demand file downloading with progress tracking** ✨
@@ -70,27 +70,42 @@ Muze/
 - **PlaybackCoordinator with service orchestration** ✨
 - **Data persistence with SwiftData** ✨
 - **Playlist management with storage** ✨
+- **Spotify OAuth authentication** 🆕
+- **Spotify liked songs import** 🆕
+- **Spotify playback via App Remote** 🆕
+- **Mixed-source playlists** 🆕
 
 ### 🚧 Next Steps
-- Spotify SDK integration and OAuth
 - Background playback and lock screen controls
 - Advanced features (crossfade, EQ, sleep timer)
 - Artwork extraction and caching
 
 ### 🎵 What Works Now
-You have a **fully functional local music player**! You can:
+You have a **fully functional music player with Spotify integration**! You can:
+
+#### Local Music
 - ✅ Add audio files to iCloud Drive (`Muze/Music/`)
 - ✅ Automatically discover and import files with metadata
 - ✅ Play local audio files with full playback controls
+- ✅ Files download on-demand when played
+
+#### Spotify Integration 🆕
+- ✅ Connect to your Spotify account (OAuth authentication)
+- ✅ Import all your Spotify liked songs
+- ✅ Play Spotify tracks through the Spotify app
+- ✅ Unified library with local + Spotify tracks
+
+#### Playlists & Organization
 - ✅ Create and manage playlists (saved with SwiftData)
+- ✅ Mix Spotify and local tracks in the same playlist
 - ✅ Navigate between tracks with queue management
 - ✅ Use shuffle and repeat modes
-- ✅ Files download on-demand when played
 - ✅ Data persists between app launches
 
 ## 📚 Documentation
 
 - **[SETUP.md](SETUP.md)** - Complete setup guide (CLI, GUI, iCloud, configuration)
+- **[SPOTIFY_SETUP.md](SPOTIFY_SETUP.md)** - Spotify Developer setup and integration guide 🆕
 - **[DEVELOPMENT.md](DEVELOPMENT.md)** - Architecture details and implementation roadmap
 - **[Makefile](Makefile)** - Build commands reference
 
@@ -148,12 +163,24 @@ MP3, M4A, AAC, WAV, FLAC, AIFF, CAF
 
 ## ⚙️ Configuration
 
+### Spotify Setup (Optional but Recommended)
+
+To enable Spotify integration:
+1. Create a Spotify Developer app at [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard)
+2. Get your Client ID
+3. Add redirect URI: `muze://callback`
+4. Update `Muze/Utilities/Constants.swift` with your Client ID
+
+**See [SPOTIFY_SETUP.md](SPOTIFY_SETUP.md) for detailed instructions.**
+
+### Other Settings
+
 Edit `Muze/Utilities/Constants.swift`:
 
 ```swift
 // Spotify configuration
 enum Spotify {
-    static let clientID = "YOUR_CLIENT_ID"
+    static let clientID = "YOUR_CLIENT_ID"  // From Spotify Dashboard
     static let redirectURI = "muze://callback"
 }
 
@@ -188,6 +215,6 @@ This project is provided as-is for development purposes.
 ---
 
 **Version**: 1.0.0  
-**Last Updated**: October 8, 2025  
+**Last Updated**: October 13, 2025  
 **Minimum iOS**: 17.0  
-**Latest**: iCloud integration & local playback complete! 🎉
+**Latest**: Spotify integration complete! Import your liked songs and enjoy unified playback! 🎵

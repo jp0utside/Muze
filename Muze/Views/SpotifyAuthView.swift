@@ -8,6 +8,7 @@
 import SwiftUI
 import SwiftData
 import SafariServices
+import Combine
 
 /// View for Spotify authentication
 struct SpotifyAuthView: View {
@@ -23,6 +24,7 @@ struct SpotifyAuthView: View {
     @State private var importProgress: (imported: Int, total: Int) = (0, 0)
     @State private var errorMessage: String?
     @State private var successMessage: String?
+    @State private var cancellables = Set<AnyCancellable>()
     
     var body: some View {
         NavigationView {
@@ -153,10 +155,19 @@ struct SpotifyAuthView: View {
             }
             .sheet(isPresented: $showingSafari) {
                 if let url = authorizationURL {
-                    SafariView(url: url) { url in
-                        handleCallback(url: url)
-                    }
+                    SafariView(url: url)
                 }
+            }
+            .onAppear {
+                // Listen for authentication changes
+                authManager.$isAuthenticated
+                    .sink { authenticated in
+                        if authenticated {
+                            showingSafari = false
+                            isLoading = false
+                        }
+                    }
+                    .store(in: &cancellables)
             }
         }
     }
@@ -167,38 +178,15 @@ struct SpotifyAuthView: View {
             return
         }
         
+        // Debug: Print the URL we're using
+        print("🔐 Spotify Auth URL: \(url.absoluteString)")
+        print("🔐 Redirect URI we're requesting: muze://callback")
+        print("🔐 Client ID: \(authManager.clientID)")
+        
         authorizationURL = url
         showingSafari = true
-        errorMessage = nil
-    }
-    
-    private func handleCallback(url: URL) {
-        showingSafari = false
-        
-        // Parse authorization code from callback URL
-        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              let code = components.queryItems?.first(where: { $0.name == "code" })?.value else {
-            errorMessage = "Failed to get authorization code"
-            return
-        }
-        
         isLoading = true
-        
-        Task {
-            do {
-                try await authManager.handleAuthorizationCallback(code: code)
-                await MainActor.run {
-                    isLoading = false
-                    // Connect to Spotify after authentication
-                    spotifyService.connect()
-                }
-            } catch {
-                await MainActor.run {
-                    isLoading = false
-                    errorMessage = "Authentication failed: \(error.localizedDescription)"
-                }
-            }
-        }
+        errorMessage = nil
     }
     
     private func importLikedSongs() {
@@ -250,36 +238,14 @@ struct FeatureRow: View {
 
 struct SafariView: UIViewControllerRepresentable {
     let url: URL
-    let onCallback: (URL) -> Void
     
     func makeUIViewController(context: Context) -> SFSafariViewController {
         let safari = SFSafariViewController(url: url)
-        safari.delegate = context.coordinator
+        safari.preferredControlTintColor = .systemGreen
         return safari
     }
     
     func updateUIViewController(_ uiViewController: SFSafariViewController, context: Context) {}
-    
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onCallback: onCallback)
-    }
-    
-    class Coordinator: NSObject, SFSafariViewControllerDelegate {
-        let onCallback: (URL) -> Void
-        
-        init(onCallback: @escaping (URL) -> Void) {
-            self.onCallback = onCallback
-        }
-        
-        func safariViewController(_ controller: SFSafariViewController, 
-                                 initialLoadDidRedirectTo URL: URL) {
-            // Check if this is our callback URL
-            if URL.scheme == "muze" {
-                onCallback(URL)
-                controller.dismiss(animated: true)
-            }
-        }
-    }
 }
 
 #Preview {

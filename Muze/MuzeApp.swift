@@ -50,8 +50,47 @@ struct MuzeApp: App {
             ContentView()
                 .environmentObject(playbackCoordinator)
                 .environmentObject(playlistManager)
+                .onOpenURL { url in
+                    handleIncomingURL(url)
+                }
         }
         .modelContainer(modelContainer)  // Inject container into environment
+    }
+    
+    // MARK: - URL Handling
+    
+    private func handleIncomingURL(_ url: URL) {
+        // Handle Spotify OAuth callback
+        guard url.scheme == "muze",
+              url.host == "callback" else {
+            return
+        }
+        
+        AppLogger.logPlaylist("Received OAuth callback: \(url.absoluteString)")
+        
+        // Extract the authorization code
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let code = components.queryItems?.first(where: { $0.name == "code" })?.value else {
+            AppLogger.logPlaylist("Failed to extract authorization code from callback", level: .error)
+            return
+        }
+        
+        AppLogger.logPlaylist("Authorization code received, processing...")
+        
+        // Handle the callback through the auth manager
+        Task {
+            do {
+                try await playbackCoordinator.spotifyAuth.handleAuthorizationCallback(code: code)
+                AppLogger.logPlaylist("Spotify authentication successful!")
+                
+                // Connect to Spotify
+                await MainActor.run {
+                    playbackCoordinator.spotify.connect()
+                }
+            } catch {
+                AppLogger.logPlaylist("Spotify authentication failed: \(error)", level: .error)
+            }
+        }
     }
 }
 

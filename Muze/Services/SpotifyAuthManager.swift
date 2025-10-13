@@ -7,6 +7,7 @@
 
 import Foundation
 import Combine
+import CommonCrypto
 
 /// Manages Spotify OAuth authentication flow
 class SpotifyAuthManager: ObservableObject {
@@ -27,6 +28,8 @@ class SpotifyAuthManager: ObservableObject {
     private let expirationKey = "com.muze.spotify.expirationDate"
     
     private var refreshTimer: Timer?
+    private var codeVerifier: String?
+    private var codeChallenge: String?
     
     // MARK: - Initialization
     
@@ -53,17 +56,56 @@ class SpotifyAuthManager: ObservableObject {
     
     // MARK: - Authentication
     
-    /// Generate authorization URL for OAuth flow
+    /// Generate authorization URL for OAuth flow with PKCE
     func getAuthorizationURL() -> URL? {
+        // Generate PKCE code verifier and challenge
+        generatePKCECodes()
+        
         var components = URLComponents(string: "https://accounts.spotify.com/authorize")!
         components.queryItems = [
             URLQueryItem(name: "client_id", value: clientID),
             URLQueryItem(name: "response_type", value: "code"),
             URLQueryItem(name: "redirect_uri", value: redirectURI),
             URLQueryItem(name: "scope", value: scopes.joined(separator: " ")),
+            URLQueryItem(name: "code_challenge_method", value: "S256"),
+            URLQueryItem(name: "code_challenge", value: codeChallenge),
             URLQueryItem(name: "show_dialog", value: "true")
         ]
         return components.url
+    }
+    
+    /// Generate PKCE code verifier and challenge
+    private func generatePKCECodes() {
+        // Generate a random code verifier (43-128 characters)
+        let verifier = generateRandomString(length: 128)
+        codeVerifier = verifier
+        
+        // Generate code challenge (SHA256 hash of verifier, base64url encoded)
+        if let data = verifier.data(using: .utf8),
+           let hash = sha256(data: data) {
+            codeChallenge = base64URLEncode(data: hash)
+        }
+    }
+    
+    private func generateRandomString(length: Int) -> String {
+        let characters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        return String((0..<length).compactMap { _ in characters.randomElement() })
+    }
+    
+    private func sha256(data: Data) -> Data? {
+        var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
+        data.withUnsafeBytes {
+            _ = CC_SHA256($0.baseAddress, CC_LONG(data.count), &hash)
+        }
+        return Data(hash)
+    }
+    
+    private func base64URLEncode(data: Data) -> String {
+        var base64 = data.base64EncodedString()
+        base64 = base64.replacingOccurrences(of: "+", with: "-")
+        base64 = base64.replacingOccurrences(of: "/", with: "_")
+        base64 = base64.replacingOccurrences(of: "=", with: "")
+        return base64
     }
     
     /// Handle authorization callback with code
@@ -94,15 +136,34 @@ class SpotifyAuthManager: ObservableObject {
             URLQueryItem(name: "grant_type", value: "authorization_code"),
             URLQueryItem(name: "code", value: code),
             URLQueryItem(name: "redirect_uri", value: redirectURI),
-            URLQueryItem(name: "client_id", value: clientID)
+            URLQueryItem(name: "client_id", value: clientID),
+            URLQueryItem(name: "code_verifier", value: codeVerifier)
         ]
         
         request.httpBody = components.query?.data(using: .utf8)
         
+        // Debug logging
+        print("🔐 Token Exchange Request:")
+        print("🔐   URL: \(url.absoluteString)")
+        print("🔐   Method: \(request.httpMethod ?? "nil")")
+        print("🔐   Body: \(String(data: request.httpBody ?? Data(), encoding: .utf8) ?? "nil")")
+        print("🔐   redirect_uri we're sending: \(redirectURI)")
+        print("🔐   client_id: \(clientID)")
+        print("🔐   code (first 20 chars): \(String(code.prefix(20)))...")
+        
         let (data, response) = try await URLSession.shared.data(for: request)
         
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
+        guard let httpResponse = response as? HTTPURLResponse else {
+            print("🔐 ❌ No HTTP response received")
+            throw SpotifyAuthError.tokenExchangeFailed
+        }
+        
+        print("🔐 Token Exchange Response:")
+        print("🔐   Status Code: \(httpResponse.statusCode)")
+        print("🔐   Response Body: \(String(data: data, encoding: .utf8) ?? "nil")")
+        
+        guard httpResponse.statusCode == 200 else {
+            print("🔐 ❌ Token exchange failed with status \(httpResponse.statusCode)")
             throw SpotifyAuthError.tokenExchangeFailed
         }
         

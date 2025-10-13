@@ -19,7 +19,7 @@ enum Constants {
     enum Spotify {
         // TODO: Add your Spotify Client ID from https://developer.spotify.com/dashboard
         static let clientID = "d47f65a225ae4bae8401a9c4ef07dab3"
-        static let redirectURI = "muze://callback"
+        static let redirectURI = "muze://callback/"  // iOS adds trailing slash automatically
         
         // Spotify API scopes needed
         static let scopes = [

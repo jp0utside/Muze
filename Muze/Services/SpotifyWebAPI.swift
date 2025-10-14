@@ -204,6 +204,182 @@ class SpotifyWebAPI {
         let savedTracksResponse = try JSONDecoder().decode(SpotifySavedTracksResponse.self, from: data)
         return savedTracksResponse.items.map { $0.track }
     }
+    
+    // MARK: - Web API Playback Control
+    
+    /// Start/resume playback of a specific track
+    func startPlayback(uri: String) async throws {
+        guard let token = accessToken else {
+            throw SpotifyError.notAuthenticated
+        }
+        
+        let url = URL(string: "\(baseURL)/me/player/play")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        let body = ["uris": [uri]]
+        request.httpBody = try? JSONEncoder().encode(body)
+        
+        let (_, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw SpotifyError.invalidResponse
+        }
+        
+        // Accept 200, 202, or 204 as success
+        guard (200...204).contains(httpResponse.statusCode) else {
+            throw SpotifyError.apiError(statusCode: httpResponse.statusCode)
+        }
+    }
+    
+    /// Pause playback
+    func pausePlayback() async throws {
+        guard let token = accessToken else {
+            print("🌐 ❌ No access token for Web API")
+            throw SpotifyError.notAuthenticated
+        }
+        
+        print("🌐 Pause request - token: \(String(token.prefix(20)))...")
+        
+        let url = URL(string: "\(baseURL)/me/player/pause")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            print("🌐 ❌ No HTTP response")
+            throw SpotifyError.invalidResponse
+        }
+        
+        print("🌐 Pause response status: \(httpResponse.statusCode)")
+        
+        if httpResponse.statusCode == 403 {
+            print("🌐 ❌ 403 Forbidden - Token might not have playback control permissions")
+            let body = String(data: data, encoding: .utf8) ?? "nil"
+            print("🌐 Response: \(body)")
+        } else if httpResponse.statusCode == 404 {
+            print("🌐 ❌ 404 Not Found - No active device found")
+            print("🌐 Make sure Spotify is actively playing on a device")
+        }
+        
+        // Accept 200, 202, or 204 as success
+        guard (200...204).contains(httpResponse.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? "nil"
+            print("🌐 ❌ Error response: \(body)")
+            throw SpotifyError.apiError(statusCode: httpResponse.statusCode)
+        }
+        
+        print("🌐 ✅ Pause succeeded (status \(httpResponse.statusCode))")
+    }
+    
+    /// Resume playback
+    func resumePlayback() async throws {
+        guard let token = accessToken else {
+            throw SpotifyError.notAuthenticated
+        }
+        
+        let url = URL(string: "\(baseURL)/me/player/play")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        
+        let (_, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...204).contains(httpResponse.statusCode) else {
+            throw SpotifyError.invalidResponse
+        }
+    }
+    
+    /// Skip to next track
+    func skipToNext() async throws {
+        guard let token = accessToken else {
+            throw SpotifyError.notAuthenticated
+        }
+        
+        let url = URL(string: "\(baseURL)/me/player/next")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        
+        let (_, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...204).contains(httpResponse.statusCode) else {
+            throw SpotifyError.invalidResponse
+        }
+    }
+    
+    /// Skip to previous track
+    func skipToPrevious() async throws {
+        guard let token = accessToken else {
+            throw SpotifyError.notAuthenticated
+        }
+        
+        let url = URL(string: "\(baseURL)/me/player/previous")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        
+        let (_, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...204).contains(httpResponse.statusCode) else {
+            throw SpotifyError.invalidResponse
+        }
+    }
+    
+    /// Seek to position in track
+    func seek(toPositionMs positionMs: Int) async throws {
+        guard let token = accessToken else {
+            throw SpotifyError.notAuthenticated
+        }
+        
+        let url = URL(string: "\(baseURL)/me/player/seek?position_ms=\(positionMs)")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        
+        let (_, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...204).contains(httpResponse.statusCode) else {
+            throw SpotifyError.invalidResponse
+        }
+    }
+    
+    /// Get current playback state
+    func getCurrentPlayback() async throws -> SpotifyPlaybackState? {
+        guard let token = accessToken else {
+            throw SpotifyError.notAuthenticated
+        }
+        
+        let url = URL(string: "\(baseURL)/me/player")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw SpotifyError.invalidResponse
+        }
+        
+        // 204 = no active playback
+        if httpResponse.statusCode == 204 {
+            return nil
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            throw SpotifyError.apiError(statusCode: httpResponse.statusCode)
+        }
+        
+        return try JSONDecoder().decode(SpotifyPlaybackState.self, from: data)
+    }
 }
 
 // MARK: - Response Models
@@ -300,6 +476,26 @@ struct SpotifySavedTracksResponse: Codable {
 
 struct SpotifySavedTrackItem: Codable {
     let track: SpotifyTrack
+}
+
+// MARK: - Playback State Models
+
+struct SpotifyPlaybackState: Codable {
+    let is_playing: Bool
+    let progress_ms: Int?
+    let item: SpotifyTrack?
+    let device: SpotifyDevice?
+    
+    var progressSeconds: TimeInterval {
+        TimeInterval(progress_ms ?? 0) / 1000.0
+    }
+}
+
+struct SpotifyDevice: Codable {
+    let id: String
+    let name: String
+    let type: String
+    let is_active: Bool
 }
 
 // MARK: - Track Conversion

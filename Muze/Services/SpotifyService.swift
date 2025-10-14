@@ -25,6 +25,7 @@ class SpotifyService: NSObject, ObservableObject {
     private let webAPI: SpotifyWebAPI
     
     private var timeUpdateTimer: Timer?
+    private var webAPIPollingTimer: Timer?
     
     // MARK: - Callbacks
     
@@ -43,15 +44,19 @@ class SpotifyService: NSObject, ObservableObject {
         // Set up App Remote
         setupAppRemote()
         
-        // Update Web API token when authenticated
+        // IMPORTANT: Set OAuth token for Web API (has full permissions)
         if let token = authManager.accessToken {
+            print("🔧 Setting OAuth token on Web API for playback control")
             webAPI.setAccessToken(token)
+        } else {
+            print("🔧 ⚠️ No OAuth token available yet for Web API")
         }
     }
     
     deinit {
         disconnect()
         timeUpdateTimer?.invalidate()
+        webAPIPollingTimer?.invalidate()
     }
     
     // MARK: - App Remote Setup
@@ -110,14 +115,25 @@ class SpotifyService: NSObject, ObservableObject {
         }
         isConnected = false
         stopTimeUpdateTimer()
+        stopWebAPIPolling()
     }
     
     /// Update access token (called when App Remote callback returns new token)
     func updateAccessToken(_ token: String) {
-        print("🔌 Updating access token from App Remote callback...")
+        print("🔌 Received App Remote access token from callback")
+        print("🔌 Setting it on appRemote.connectionParameters...")
         appRemote.connectionParameters.accessToken = token
-        webAPI.setAccessToken(token)
-        print("🔌 Access token updated")
+        
+        // DO NOT set this token on webAPI - it doesn't have Web API permissions!
+        // Web API should use the OAuth token from authManager
+        print("🔌 NOT updating Web API token (App Remote token lacks Web API permissions)")
+        print("🔌 Web API will use OAuth token from authManager instead")
+        
+        // Ensure webAPI has the OAuth token
+        if let oauthToken = authManager.accessToken {
+            print("🔌 Setting OAuth token on Web API: \(String(oauthToken.prefix(20)))...")
+            webAPI.setAccessToken(oauthToken)
+        }
     }
     
     /// Force connection established state (when authorizeAndPlayURI succeeds)
@@ -126,13 +142,46 @@ class SpotifyService: NSObject, ObservableObject {
         isConnected = true
         print("🔌 isConnected = true")
         
-        // Subscribe to player state
+        // Subscribe to player state (best effort - might not work)
         subscribeToPlayerState()
         
-        // Start time updates
+        // Start Web API polling for state updates (THIS WILL WORK!)
         isPlaying = true
-        startTimeUpdateTimer()
-        print("🔌 Connection state updated, playback should be active")
+        startWebAPIPolling()
+        print("🔌 Connection state updated, Web API polling started")
+    }
+    
+    // MARK: - Token Management
+    
+    /// Ensure OAuth token is valid, refresh if expired
+    private func ensureValidToken() async throws {
+        guard let expirationDate = authManager.expirationDate else {
+            print("🔑 No expiration date found, attempting refresh...")
+            try await authManager.refreshAccessToken()
+            
+            // Update webAPI with new token
+            if let newToken = authManager.accessToken {
+                webAPI.setAccessToken(newToken)
+                print("🔑 ✅ Token refreshed and updated on Web API")
+            }
+            return
+        }
+        
+        // Check if token will expire in the next minute
+        let expiresIn = expirationDate.timeIntervalSinceNow
+        
+        if expiresIn < 60 {
+            print("🔑 Token expired or expiring soon (in \(Int(expiresIn))s), refreshing...")
+            try await authManager.refreshAccessToken()
+            
+            // Update webAPI with new token
+            if let newToken = authManager.accessToken {
+                webAPI.setAccessToken(newToken)
+                print("🔑 ✅ Token refreshed: expires in \(authManager.expirationDate?.timeIntervalSinceNow ?? 0)s")
+            }
+        } else {
+            print("🔑 Token still valid (expires in \(Int(expiresIn))s)")
+        }
     }
     
     // MARK: - Playback Control
@@ -145,222 +194,152 @@ class SpotifyService: NSObject, ObservableObject {
         print("🎵 Auth state: \(authManager.isAuthenticated ? "✅ authenticated" : "❌ not authenticated")")
         print("🎵 Access token available: \(authManager.accessToken != nil ? "✅ yes" : "❌ no")")
         
-        // If not connected, use authorizeAndPlayURI (recommended by Spotify SDK)
-        if !isConnected {
-            print("🎵 Not connected - using authorizeAndPlayURI...")
-            print("🎵 This will trigger Spotify app to open and authorize connection")
-            
-            // Set the access token first
-            if let token = authManager.accessToken {
-                print("🎵 Setting access token on connectionParameters...")
-                appRemote.connectionParameters.accessToken = token
-            }
-            
-            // Use authorizeAndPlayURI - this handles auth + connection + playback in one call
-            print("🎵 Calling appRemote.authorizeAndPlayURI(\(spotifyURI))...")
-            
-            // Call on a background thread since it might trigger UI
-            await MainActor.run {
-                appRemote.authorizeAndPlayURI(spotifyURI)
-            }
-            
-            print("🎵 authorizeAndPlayURI called - waiting for delegate callbacks...")
-            
-            // Wait for connection to establish and playback to start
-            print("🎵 Waiting up to 15 seconds for Spotify to respond...")
-            for attempt in 1...30 {  // Wait up to 15 seconds (0.5s each)
-                try await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
-                
-                if isConnected {
-                    print("🎵 ✅ Connection established on attempt \(attempt)!")
-                    print("🎵 Spotify should now be playing the track")
-        isPlaying = true
-                    startTimeUpdateTimer()
-                    return
-                }
-                
-                if attempt % 4 == 0 {  // Log every 2 seconds
-                    print("🎵 ⏳ Still waiting... (\(attempt/2) seconds elapsed)")
-                }
-            }
-            
-            // Timeout - connection didn't establish
-            print("🎵 ========================================")
-            print("🎵 ❌ TIMEOUT: Connection didn't establish in 15 seconds")
-            print("🎵 This usually means:")
-            print("🎵   1. Spotify app isn't installed")
-            print("🎵   2. You don't have Spotify Premium")
-            print("🎵   3. Spotify app is refusing the connection")
-            print("🎵   4. You're not logged into Spotify app")
-            print("🎵 ========================================")
-            throw SpotifyServiceError.notConnected
+        // If not authenticated, we can't do anything
+        guard authManager.isAuthenticated else {
+            print("🎵 ❌ Not authenticated - cannot play")
+            throw SpotifyServiceError.notAuthenticated
         }
         
-        // Already connected, just play the track
-        print("🎵 ✅ Already connected to Spotify")
-        print("🎵 Sending play command to playerAPI...")
-        print("🎵 playerAPI available: \(appRemote.playerAPI != nil ? "✅ yes" : "❌ no")")
+        // Try Web API first for seamless playback (no app switching!)
+        print("🎵 Attempting Web API playback (seamless, no app switching)...")
         
-        // If playerAPI is nil (can happen after authorizeAndPlayURI), use authorizeAndPlayURI again
-        guard let playerAPI = appRemote.playerAPI else {
-            print("🎵 ⚠️ playerAPI is nil - using authorizeAndPlayURI as fallback...")
+        do {
+            // Ensure token is valid
+            try await ensureValidToken()
             
-            // Use authorizeAndPlayURI since regular play won't work
-            await MainActor.run {
-                appRemote.authorizeAndPlayURI(spotifyURI)
-            }
+            // Try to play via Web API
+            print("🎵 Calling webAPI.startPlayback...")
+            try await webAPI.startPlayback(uri: spotifyURI)
+            print("🎵 ✅ Web API playback started successfully!")
             
-            print("🎵 authorizeAndPlayURI called for already-connected session")
-            // Wait a moment for it to complete
-            try await Task.sleep(nanoseconds: 1_000_000_000)
-            
+            // Mark as connected and playing
+            isConnected = true
             isPlaying = true
-            startTimeUpdateTimer()
+            startWebAPIPolling()
             return
+            
+        } catch let error as SpotifyError {
+            print("🎵 ⚠️ Web API playback failed: \(error)")
+            
+            // Check if it's a 404 (no active device)
+            if case .apiError(let statusCode) = error, statusCode == 404 {
+                print("🎵 No active Spotify device found")
+                print("🎵 Falling back to authorizeAndPlayURI (will launch Spotify app)...")
+            } else {
+                print("🎵 Web API error, falling back to authorizeAndPlayURI...")
+            }
+        } catch {
+            print("🎵 ⚠️ Unexpected error: \(error)")
+            print("🎵 Falling back to authorizeAndPlayURI...")
         }
         
-        return try await withCheckedThrowingContinuation { continuation in
-            playerAPI.play(spotifyURI, callback: { [weak self] _, error in
-                if let error = error {
-                    print("🎵 ❌ Play command failed with error:")
-                    print("🎵    \(error.localizedDescription)")
-                    continuation.resume(throwing: error)
-                } else {
-                    print("🎵 ✅ Play command succeeded!")
-                    print("🎵 Starting playback and time updates...")
-                    self?.isPlaying = true
-                    self?.startTimeUpdateTimer()
-                    continuation.resume()
-                }
-            })
+        // Fallback: Use authorizeAndPlayURI to launch Spotify app
+        print("🎵 Using authorizeAndPlayURI as fallback...")
+        print("🎵 This will open Spotify app and start playback")
+        
+        // Set the access token
+        if let token = authManager.accessToken {
+            appRemote.connectionParameters.accessToken = token
         }
+        
+        // Call authorizeAndPlayURI
+        await MainActor.run {
+            appRemote.authorizeAndPlayURI(spotifyURI)
+        }
+        
+        print("🎵 authorizeAndPlayURI called - waiting for callback...")
+        
+        // Wait for connection callback
+        for attempt in 1...30 {  // Wait up to 15 seconds
+            try await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+            
+            if isConnected {
+                print("🎵 ✅ Connection established on attempt \(attempt)!")
+                isPlaying = true
+                startWebAPIPolling()
+                return
+            }
+            
+            if attempt % 4 == 0 {
+                print("🎵 ⏳ Still waiting... (\(attempt/2) seconds elapsed)")
+            }
+        }
+        
+        print("🎵 ❌ Timeout waiting for Spotify callback")
+        throw SpotifyServiceError.notConnected
     }
     
     /// Resume playback
     func resume() async throws {
-        guard isConnected else {
-            throw SpotifyServiceError.notConnected
-        }
+        print("▶️ resume() called")
+        print("▶️ Using Web API for resume...")
         
-        return try await withCheckedThrowingContinuation { continuation in
-            appRemote.playerAPI?.resume({ [weak self] _, error in
-                if let error = error {
-                    continuation.resume(throwing: error)
-                } else {
-                    self?.isPlaying = true
-                    self?.startTimeUpdateTimer()
-                    continuation.resume()
-                }
-            })
-        }
+        // Refresh token if needed
+        try await ensureValidToken()
+        
+        // Use Web API instead of App Remote
+        try await webAPI.resumePlayback()
+        print("▶️ ✅ Web API resume succeeded")
+        
+        isPlaying = true
+        startWebAPIPolling()
     }
     
     /// Pause playback
     func pause() async throws {
         print("⏸️ pause() called")
-        print("⏸️ isConnected: \(isConnected)")
-        print("⏸️ playerAPI available: \(appRemote.playerAPI != nil)")
+        print("⏸️ Using Web API for pause...")
         
-        guard isConnected else {
-            print("⏸️ ❌ Not connected")
-            throw SpotifyServiceError.notConnected
-        }
+        // Refresh token if needed
+        try await ensureValidToken()
         
-        guard let playerAPI = appRemote.playerAPI else {
-            print("⏸️ ❌ playerAPI is nil - cannot pause")
-            print("⏸️ This is a limitation when using authorizeAndPlayURI")
-            print("⏸️ Pause the song directly in Spotify app")
-            throw SpotifyServiceError.invalidState
-        }
+        // Use Web API instead of App Remote
+        try await webAPI.pausePlayback()
+        print("⏸️ ✅ Web API pause succeeded")
         
-        return try await withCheckedThrowingContinuation { continuation in
-            playerAPI.pause({ [weak self] _, error in
-                if let error = error {
-                    print("⏸️ ❌ Pause failed: \(error)")
-                    continuation.resume(throwing: error)
-                } else {
-                    print("⏸️ ✅ Paused")
-                    self?.isPlaying = false
-                    self?.stopTimeUpdateTimer()
-                    continuation.resume()
-                }
-            })
-        }
+        isPlaying = false
+        stopWebAPIPolling()
     }
     
     /// Skip to next track
     func skipToNext() async throws {
         print("⏭️ skipToNext() called")
-        print("⏭️ playerAPI available: \(appRemote.playerAPI != nil)")
+        print("⏭️ Using Web API for skip...")
         
-        guard isConnected else {
-            print("⏭️ ❌ Not connected")
-            throw SpotifyServiceError.notConnected
-        }
+        // Refresh token if needed
+        try await ensureValidToken()
         
-        guard let playerAPI = appRemote.playerAPI else {
-            print("⏭️ ❌ playerAPI is nil - cannot skip")
-            print("⏭️ Use Spotify app directly or wait for proper SDK connection")
-            throw SpotifyServiceError.invalidState
-        }
-        
-        return try await withCheckedThrowingContinuation { continuation in
-            playerAPI.skip(toNext: { _, error in
-                if let error = error {
-                    print("⏭️ ❌ Skip failed: \(error)")
-                    continuation.resume(throwing: error)
-                } else {
-                    print("⏭️ ✅ Skipped to next")
-                    continuation.resume()
-                }
-            })
-        }
+        // Use Web API instead of App Remote
+        try await webAPI.skipToNext()
+        print("⏭️ ✅ Web API skip succeeded")
     }
     
     /// Skip to previous track
     func skipToPrevious() async throws {
         print("⏮️ skipToPrevious() called")
-        print("⏮️ playerAPI available: \(appRemote.playerAPI != nil)")
+        print("⏮️ Using Web API for skip previous...")
         
-        guard isConnected else {
-            print("⏮️ ❌ Not connected")
-            throw SpotifyServiceError.notConnected
-        }
+        // Refresh token if needed
+        try await ensureValidToken()
         
-        guard let playerAPI = appRemote.playerAPI else {
-            print("⏮️ ❌ playerAPI is nil - cannot skip")
-            throw SpotifyServiceError.invalidState
-        }
-        
-        return try await withCheckedThrowingContinuation { continuation in
-            playerAPI.skip(toPrevious: { _, error in
-                if let error = error {
-                    print("⏮️ ❌ Skip previous failed: \(error)")
-                    continuation.resume(throwing: error)
-                } else {
-                    print("⏮️ ✅ Skipped to previous")
-                    continuation.resume()
-                }
-            })
-        }
+        // Use Web API instead of App Remote
+        try await webAPI.skipToPrevious()
+        print("⏮️ ✅ Web API skip previous succeeded")
     }
     
     /// Seek to position in track
     func seek(to positionMs: Int) async throws {
-        guard isConnected else {
-            throw SpotifyServiceError.notConnected
-        }
+        print("⏩ seek() called to position: \(positionMs)ms")
+        print("⏩ Using Web API for seek...")
         
-        return try await withCheckedThrowingContinuation { continuation in
-            appRemote.playerAPI?.seek(toPosition: positionMs, callback: { [weak self] _, error in
-                if let error = error {
-                    continuation.resume(throwing: error)
-                } else {
-                    self?.currentTime = TimeInterval(positionMs) / 1000.0
-                    continuation.resume()
-                }
-            })
-        }
+        // Refresh token if needed
+        try await ensureValidToken()
+        
+        // Use Web API instead of App Remote
+        try await webAPI.seek(toPositionMs: positionMs)
+        print("⏩ ✅ Web API seek succeeded")
+        
+        currentTime = TimeInterval(positionMs) / 1000.0
     }
     
     /// Set shuffle mode
@@ -483,6 +462,58 @@ class SpotifyService: NSObject, ObservableObject {
     private func stopTimeUpdateTimer() {
         timeUpdateTimer?.invalidate()
         timeUpdateTimer = nil
+    }
+    
+    // MARK: - Web API Polling
+    
+    private func startWebAPIPolling() {
+        stopWebAPIPolling()
+        
+        print("⏱️ Starting Web API polling for playback state...")
+        
+        webAPIPollingTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            
+            Task {
+                do {
+                    // Ensure token is valid before polling
+                    try await self.ensureValidToken()
+                    
+                    guard let state = try await self.webAPI.getCurrentPlayback() else {
+                        print("⏱️ No active playback")
+                        return
+                    }
+                    
+                    await MainActor.run {
+                        self.currentTime = state.progressSeconds
+                        self.isPlaying = state.is_playing
+                        
+                        if let track = state.item {
+                            self.duration = track.durationSeconds
+                        }
+                        
+                        self.onTimeUpdate?(self.currentTime)
+                        
+                        // Check if track finished
+                        if let progressMs = state.progress_ms,
+                           let track = state.item,
+                           progressMs >= track.duration_ms - 500 {
+                            print("⏱️ Track finished!")
+                            self.onPlaybackFinished?()
+                        }
+                    }
+                } catch {
+                    // Silently fail - polling is best-effort
+                    print("⏱️ Polling error (non-fatal): \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+    
+    private func stopWebAPIPolling() {
+        webAPIPollingTimer?.invalidate()
+        webAPIPollingTimer = nil
+        print("⏱️ Stopped Web API polling")
     }
     
     // MARK: - Web API Methods

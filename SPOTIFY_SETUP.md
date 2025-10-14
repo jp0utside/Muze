@@ -170,17 +170,36 @@ After connecting:
 2. Verify redirect URI is exactly: `muze://callback` in both places
 3. Ensure your Spotify app is in "Development Mode" (it is by default)
 
-### "Cannot play Spotify tracks"
+### "Cannot play Spotify tracks" or "Connection refused"
 
 **Possible causes:**
 1. Free Spotify account (Premium required for playback via SDK)
 2. Spotify app not running or not logged in
-3. Device offline
+3. Spotify app not in the right state to accept connections
+4. Device offline
 
-**Solutions:**
-1. Upgrade to Spotify Premium (required for remote playback)
-2. Open Spotify app and ensure you're logged in
-3. Check internet connection
+**Solutions (try in order):**
+
+1. **Start playback in Spotify first**:
+   - Open the Spotify app
+   - **Play any song in Spotify** (this activates the remote control server)
+   - Keep Spotify running in the background
+   - Go back to Muze and try playing again
+
+2. **Verify Spotify Premium**:
+   - Spotify's App Remote API requires Premium
+   - Free accounts cannot use remote playback
+   - Check your account status at spotify.com/account
+
+3. **Restart both apps**:
+   - Force quit Muze (swipe up in app switcher)
+   - Force quit Spotify
+   - Open Spotify first, play a song
+   - Open Muze and try again
+
+4. **Check internet connection**:
+   - Both apps need network access
+   - Spotify requires active internet connection
 
 ### "Import failed" or "Import incomplete"
 
@@ -234,6 +253,17 @@ Or disconnect from within Muze:
 
 - **For importing liked songs**: No, free accounts work
 - **For playback**: Yes, Premium is required (Spotify SDK limitation)
+
+### Why isn't Spotify connecting?
+
+**The Spotify app's remote control server only activates when needed.** Try this:
+
+1. Open Spotify app
+2. Play a song in Spotify
+3. Keep it running in background
+4. Try Muze again
+
+This "primes" the Spotify app to accept remote connections.
 
 ### Can I search for new Spotify tracks?
 

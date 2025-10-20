@@ -1,6 +1,6 @@
 # Muze Development Guide
 
-Complete guide to the Muze architecture, project structure, and implementation roadmap.
+Complete guide to Muze architecture, design decisions, and development roadmap.
 
 ## 📋 Table of Contents
 
@@ -10,24 +10,25 @@ Complete guide to the Muze architecture, project structure, and implementation r
 - [Data Flow](#data-flow)
 - [Key Design Decisions](#key-design-decisions)
 - [Implementation Roadmap](#implementation-roadmap)
-- [Testing Strategy](#testing-strategy)
+- [Extension Points](#extension-points)
 - [Code Style Guidelines](#code-style-guidelines)
+- [Development Workflow](#development-workflow)
 
 ---
 
 ## Project Structure
 
-### Directory Structure
+### Directory Layout
 
 ```
 Muze/
-├── MuzeApp.swift                      # App entry point
+├── MuzeApp.swift                      # App entry point with SwiftData setup
 ├── Info.plist                         # App configuration
 │
-├── Models/                            # Data models (SwiftData)
+├── Models/                            # Data models (SwiftData @Model classes)
 │   ├── Track.swift                   # @Model class with multi-source support
 │   ├── Playlist.swift                # @Model class for playlists
-│   ├── TrackSource.swift             # Enum for track sources
+│   ├── TrackSource.swift             # Enum for track sources (local, spotify)
 │   └── PlaybackQueue.swift           # Queue management logic
 │
 ├── Coordinators/                      # Business logic coordinators
@@ -35,7 +36,9 @@ Muze/
 │
 ├── Services/                          # Service layer
 │   ├── LocalAudioService.swift       # AVFoundation playback
-│   ├── SpotifyService.swift          # Spotify SDK integration
+│   ├── SpotifyService.swift          # Spotify App Remote integration
+│   ├── SpotifyAuthManager.swift      # OAuth authentication
+│   ├── SpotifyWebAPI.swift           # Spotify Web API client
 │   ├── iCloudDriveManager.swift      # iCloud Drive sync
 │   └── PlaylistManager.swift         # Library & playlist management
 │
@@ -48,6 +51,9 @@ Muze/
 │   ├── AddTracksToPlaylistView.swift # Add tracks to playlist
 │   ├── SearchView.swift              # Search interface
 │   ├── FullPlayerView.swift          # Full-screen player
+│   ├── SettingsView.swift            # App settings
+│   ├── SpotifyAuthView.swift         # Spotify authentication UI
+│   ├── SpotifyConnectionStatusView.swift # Connection status
 │   │
 │   └── Components/                   # Reusable UI components
 │       ├── TrackRowView.swift        # Track list item
@@ -59,15 +65,15 @@ Muze/
     └── Logger.swift                  # Centralized logging
 ```
 
-### File Counts
+### File Statistics
 
 - **23 Swift source files**
-- **4 Models** - Data layer (Track & Playlist use SwiftData @Model)
-- **1 Coordinator** - Business logic
-- **4 Services** - External integrations
-- **10 Views** - UI layer
-- **3 Utilities** - Helpers
-- **~3,200+ lines of code** (with SwiftData implementation)
+- **4 Models** (SwiftData @Model classes)
+- **1 Coordinator** (Business logic)
+- **6 Services** (External integrations)
+- **11 Views** (UI layer)
+- **3 Utilities** (Helpers)
+- **~3,500+ lines of Swift code**
 
 ---
 
@@ -78,41 +84,72 @@ Muze/
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                        Views                            │
-│  (SwiftUI Views - LibraryView, PlaylistView, etc.)     │
+│  (SwiftUI - LibraryView, PlaylistView, PlayerView)     │
+│  • Declarative UI                                       │
+│  • Observes state changes                               │
+│  • User interaction handling                            │
 └─────────────────────────┬───────────────────────────────┘
-                          │ ObservableObject
+                          │ ObservableObject (@Published)
                           ↓
 ┌─────────────────────────────────────────────────────────┐
 │                    Coordinators                         │
 │              (PlaybackCoordinator)                      │
-│      • Manages state                                    │
+│      • Manages playback state                           │
 │      • Orchestrates services                            │
 │      • Business logic                                   │
+│      • Source routing                                   │
 └─────────────────────────┬───────────────────────────────┘
-                          │
+                          │ Service calls
                           ↓
 ┌─────────────────────────────────────────────────────────┐
 │                      Services                           │
 │   ┌──────────────────┬──────────────────┬─────────────┐│
 │   │ LocalAudioService│  SpotifyService  │iCloudMgr    ││
-│   │  (AVFoundation)  │  (Spotify SDK)   │(iCloud Sync)││
+│   │  (AVFoundation)  │  (App Remote)    │(File Sync)  ││
+│   │                  │  SpotifyWebAPI   │             ││
+│   │                  │  SpotifyAuth     │             ││
 │   └──────────────────┴──────────────────┴─────────────┘│
 └─────────────────────────┬───────────────────────────────┘
-                          │
+                          │ Data operations
                           ↓
 ┌─────────────────────────────────────────────────────────┐
 │                       Models                            │
 │          (Track, Playlist, PlaybackQueue)               │
+│          SwiftData @Model classes                       │
 └─────────────────────────────────────────────────────────┘
 ```
 
 ### Why This Architecture?
 
 1. **Coordinator Pattern**: Single source of truth for playback state
-2. **Service Layer**: Separates external integrations from business logic
-3. **Observable Objects**: Reactive UI updates with SwiftUI
-4. **UUID-based References**: Efficient memory management
-5. **Source-Agnostic**: Single Track model for all sources
+   - Centralizes business logic
+   - Easier to test
+   - Cleaner views
+   - Handles source switching
+
+2. **Service Layer**: Clear separation of concerns
+   - Modular design
+   - Testable components
+   - Easy to mock
+   - Independent development
+
+3. **Source-Agnostic Design**: Single Track model for all sources
+   - Unified interface
+   - Simplified code
+   - Mixed-source playlists work seamlessly
+   - Easy to extend
+
+4. **Observable Objects**: Reactive UI updates
+   - Automatic view updates
+   - Less boilerplate
+   - SwiftUI native
+   - Better performance
+
+5. **SwiftData Persistence**: Modern data storage
+   - iOS 17+ native framework
+   - Type-safe queries
+   - Automatic change tracking
+   - Less boilerplate than Core Data
 
 ---
 
@@ -120,74 +157,127 @@ Muze/
 
 ### 1. Models
 
-#### Track.swift
-**Purpose**: Represents a music track from any source
+#### Track.swift - Multi-Source Track Model
 
-**Key Features**:
-- UUID-based identification
-- Source-agnostic design (works for Spotify and local files)
-- Rich metadata support (title, artist, album, duration, genre, year)
-- Spotify URI for Spotify tracks
-- File URL for local tracks
-- Artwork support
+**Purpose**: Represents a music track from any source (local or Spotify)
 
-**Example**:
+**Implementation** (SwiftData @Model):
 ```swift
-struct Track: Identifiable {
-    let id: UUID
-    let title: String
-    let artist: String
-    let album: String
-    let duration: TimeInterval
-    let source: TrackSource
-    let spotifyURI: String?      // For Spotify
-    let localFileURL: URL?       // For local files
-    let artworkURL: URL?
+@Model
+class Track {
+    @Attribute(.unique) var id: UUID
+    var title: String
+    var artist: String
+    var album: String?
+    var duration: TimeInterval
+    var sourceRawValue: String  // "local" or "spotify"
+    
+    // URLs stored as Strings for SwiftData compatibility
+    var localFileURLString: String?
+    var spotifyURI: String?
+    var artworkURLString: String?
+    
+    // Additional metadata
+    var genre: String?
+    var year: Int?
+    var dateAdded: Date
+    
+    // Computed properties for convenience
+    var source: TrackSource { 
+        TrackSource(rawValue: sourceRawValue) ?? .local 
+    }
+    var localFileURL: URL? { 
+        localFileURLString.map { URL(string: $0) } ?? nil 
+    }
 }
 ```
 
-#### Playlist.swift
-**Purpose**: Collection of tracks from multiple sources
+**Key Design Choices**:
+- **UUID identification**: Unique across all sources
+- **Source enum**: Extensible to new sources (Apple Music, YouTube, etc.)
+- **Optional properties**: Not all metadata available for all sources
+- **SwiftData compatibility**: URLs stored as Strings
+- **Computed properties**: Convenience without storage overhead
 
-**Key Features**:
-- Stores track references (UUIDs)
-- Supports mixed-source playlists
-- Add/remove/reorder operations
-- Tracks creation and modification dates
-- Name and description
+#### Playlist.swift - Mixed-Source Playlists
 
-#### TrackSource.swift
+**Purpose**: Collection of tracks from any source
+
+**Implementation**:
+```swift
+@Model
+class Playlist {
+    @Attribute(.unique) var id: UUID
+    var name: String
+    var playlistDescription: String?  // 'description' conflicts with Swift
+    var trackIDs: [UUID]              // References, not embedded objects
+    var artworkURLString: String?
+    var dateCreated: Date
+    var dateModified: Date
+}
+```
+
+**Key Design Choices**:
+- **Track IDs, not objects**: Memory efficient, easier to persist
+- **Mixed sources**: No restriction on track sources
+- **Modification tracking**: Automatic timestamps
+- **Artwork support**: Custom or auto-generated
+
+#### TrackSource.swift - Source Enumeration
+
 **Purpose**: Defines available track sources
 
-**Values**:
-- `.local` - Local audio files
-- `.spotify` - Spotify tracks
+```swift
+enum TrackSource: String, Codable {
+    case local = "local"
+    case spotify = "spotify"
+    
+    var displayName: String {
+        switch self {
+        case .local: return "Local"
+        case .spotify: return "Spotify"
+        }
+    }
+    
+    var icon: String {
+        switch self {
+        case .local: return "music.note"
+        case .spotify: return "logo.spotify"
+        }
+    }
+}
+```
 
-Easily extensible for future sources (Apple Music, YouTube Music, etc.)
+**Extensibility**: Adding new sources requires:
+1. Add case to enum
+2. Create service class
+3. Add routing in coordinator
+4. Update Track model with source-specific identifier
 
-#### PlaybackQueue.swift
-**Purpose**: Manages the playback queue
+#### PlaybackQueue.swift - Queue Management
 
-**Key Features**:
-- Current track tracking
-- Next/previous navigation
-- Shuffle support
-- Repeat modes (off, one, all)
+**Purpose**: Manages playback queue with shuffle/repeat
+
+**Features**:
+- Current track index
+- Original order preservation
+- Shuffle mode with randomization
+- Repeat modes (off, all, one)
 - History tracking
-- Queue manipulation (add, remove, reorder)
+- Next/previous navigation
 
 ### 2. Coordinators
 
-#### PlaybackCoordinator.swift
+#### PlaybackCoordinator.swift - Playback Orchestration
+
 **Purpose**: Central controller for all playback operations
 
 **Responsibilities**:
-- Switch between audio sources (local/Spotify)
-- Manage playback state (play, pause, seek)
-- Control playback queue
-- Handle shuffle and repeat modes
-- Coordinate between UI and services
-- Update Now Playing info
+1. **Source Routing**: Determine which service to use
+2. **State Management**: Track playback state
+3. **Queue Management**: Control track order
+4. **Service Coordination**: Orchestrate local and Spotify services
+5. **UI Updates**: Publish state changes to views
 
 **Published Properties**:
 ```swift
@@ -212,51 +302,169 @@ func toggleShuffle()
 func cycleRepeatMode()
 ```
 
+**Source Routing Logic**:
+```swift
+private func playCurrentTrack() {
+    guard let track = currentTrack else { return }
+    
+    switch track.source {
+    case .local:
+        Task {
+            try await localAudioService.play(url: track.localFileURL!)
+        }
+    case .spotify:
+        Task {
+            try await spotifyService.play(spotifyURI: track.spotifyURI!)
+        }
+    }
+}
+```
+
 ### 3. Services
 
-#### LocalAudioService.swift
-**Purpose**: Handles local file playback using AVFoundation
+#### LocalAudioService.swift - Local Audio Playback
+
+**Purpose**: Handle local file playback with AVFoundation
 
 **Features**:
 - AVAudioPlayer management
-- iCloud Drive integration
-- On-demand file downloading
-- Playback control (play, pause, seek)
-- Time update callbacks
+- iCloud file download integration
+- Progress callbacks
 - Audio session configuration
-- Download progress tracking
+- Time updates
+- Playback control
 
 **Key Methods**:
 ```swift
 func play(url: URL) async throws
 func pause()
+func resume()
+func stop()
 func seek(to time: TimeInterval)
-func isCurrentFileDownloaded() -> Bool
-func currentFileDownloadProgress() -> Double?
 ```
 
-#### SpotifyService.swift
-**Purpose**: Integrates with Spotify iOS SDK
+**iCloud Integration**:
+```swift
+private func prepareForPlayback(url: URL) async throws -> URL {
+    // Check if file needs downloading
+    if !iCloudManager.isFileDownloaded(url) {
+        try await iCloudManager.downloadFileIfNeeded(url)
+    }
+    return url
+}
+```
 
-**Features** (to be implemented):
-- OAuth authentication
-- Spotify Connect control
-- Track info fetching
-- Search integration
-- Playlist import
+#### SpotifyService.swift - Spotify App Remote
 
-#### iCloudDriveManager.swift
-**Purpose**: Manages iCloud Drive sync
+**Purpose**: Control Spotify playback through iOS SDK
 
 **Features**:
-- iCloud Drive availability checking
+- App Remote connection management
+- Playback control (play, pause, skip, seek)
+- Player state subscription
+- Shuffle and repeat control
+- Real-time position updates
+
+**Key Methods**:
+```swift
+func connect() async throws
+func disconnect()
+func play(spotifyURI: String) async throws
+func pause()
+func resume()
+func skipNext()
+func skipPrevious()
+func seek(to position: TimeInterval)
+```
+
+**Connection Management**:
+```swift
+private func ensureConnected() async throws {
+    guard !appRemote.isConnected else { return }
+    try await connect()
+}
+```
+
+#### SpotifyAuthManager.swift - OAuth Authentication
+
+**Purpose**: Handle Spotify OAuth 2.0 flow with PKCE
+
+**Features**:
+- Authorization code flow with PKCE
+- Token storage and retrieval
+- Automatic token refresh
+- Session management
+
+**Key Methods**:
+```swift
+func startAuthentication() -> URL
+func handleCallback(url: URL) async throws
+func getValidAccessToken() async throws -> String
+func refreshAccessToken() async throws
+```
+
+**Token Management**:
+```swift
+private func storeTokens(accessToken: String, refreshToken: String, expiresIn: Int) {
+    UserDefaults.standard.set(accessToken, forKey: "spotify_access_token")
+    UserDefaults.standard.set(refreshToken, forKey: "spotify_refresh_token")
+    let expirationDate = Date().addingTimeInterval(TimeInterval(expiresIn))
+    UserDefaults.standard.set(expirationDate, forKey: "spotify_token_expiration")
+}
+```
+
+#### SpotifyWebAPI.swift - Web API Client
+
+**Purpose**: Interact with Spotify Web API
+
+**Features**:
+- RESTful API client
+- Search functionality
+- User library access
+- Playlist retrieval
+- Track metadata
+- Automatic pagination
+
+**Key Methods**:
+```swift
+func searchTracks(query: String, limit: Int) async throws -> [Track]
+func getUserSavedTracks(limit: Int, offset: Int) async throws -> [Track]
+func getUserPlaylists() async throws -> [SpotifyPlaylist]
+```
+
+**Pagination Handling**:
+```swift
+func getAllSavedTracks(progressCallback: ((Int, Int) -> Void)?) async throws -> [Track] {
+    var allTracks: [Track] = []
+    var offset = 0
+    let limit = 50
+    
+    while true {
+        let batch = try await getUserSavedTracks(limit: limit, offset: offset)
+        allTracks.append(contentsOf: batch)
+        progressCallback?(allTracks.count, -1) // -1 = unknown total
+        
+        if batch.count < limit { break }
+        offset += limit
+    }
+    
+    return allTracks
+}
+```
+
+#### iCloudDriveManager.swift - iCloud Integration
+
+**Purpose**: Manage iCloud Drive file sync and monitoring
+
+**Features**:
+- iCloud availability detection
 - Automatic folder creation
 - Recursive file scanning
-- On-demand file downloading
+- On-demand downloading
 - Download progress tracking
 - File monitoring (NSMetadataQuery)
 - Metadata extraction (AVAsset)
-- File import/delete operations
+- Local storage fallback
 
 **Key Methods**:
 ```swift
@@ -268,133 +476,243 @@ func downloadProgress(for url: URL) -> Double?
 func startMonitoring()
 ```
 
-#### PlaylistManager.swift
-**Purpose**: Manages playlists and track library with SwiftData persistence
+**Local Storage Fallback**:
+```swift
+init() {
+    if let iCloudURL = FileManager.default.url(
+        forUbiquityContainerIdentifier: nil
+    )?.appendingPathComponent("Documents") {
+        self.usingLocalStorage = false
+        self.iCloudDocumentsURL = iCloudURL
+    } else {
+        // Fallback to local storage
+        self.usingLocalStorage = true
+        self.iCloudDocumentsURL = nil
+        Logger.log("⚠️ iCloud Drive not available - using local storage fallback")
+    }
+}
+```
+
+#### PlaylistManager.swift - Library Management
+
+**Purpose**: Manage playlists and track library with SwiftData
 
 **Features**:
 - CRUD operations for playlists
 - Track library management
 - Search functionality
 - iCloud Drive sync
-- **SwiftData persistence** ✅ IMPLEMENTED
-- Automatic save/load functionality
-- FetchDescriptor-based queries
+- SwiftData persistence
+- Duplicate detection
 
 **Key Methods**:
 ```swift
-func createPlaylist(name: String) -> Playlist
-func addTrack(_ track: Track)
-func removeTrack(_ trackID: UUID)
-func addTrackToPlaylist(trackID: UUID, playlistID: UUID)
-func removeTrackFromPlaylist(trackID: UUID, playlistID: UUID)
+func createPlaylist(name: String, description: String?) -> Playlist
+func deletePlaylist(_ playlist: Playlist)
+func addTrackToPlaylist(track: Track, playlist: Playlist)
+func removeTrackFromPlaylist(trackID: UUID, playlist: Playlist)
 func syncWithiCloudDrive() async throws
-func importFromiCloudDrive(_ fileURL: URL) async throws -> Track
+func importSpotifyTrack(_ track: Track) -> Track
 func searchTracks(query: String) -> [Track]
+```
 
-// SwiftData methods
-private func loadData()  // Uses FetchDescriptor
-private func saveData()  // Uses ModelContext.save()
+**SwiftData Integration**:
+```swift
+private let modelContext: ModelContext
+
+func loadData() {
+    let trackDescriptor = FetchDescriptor<Track>()
+    tracks = try! modelContext.fetch(trackDescriptor)
+    
+    let playlistDescriptor = FetchDescriptor<Playlist>()
+    playlists = try! modelContext.fetch(playlistDescriptor)
+}
+
+func saveData() {
+    try! modelContext.save()
+}
 ```
 
 ### 4. Views
 
-#### Main Views
-- **ContentView**: Main app container with tab navigation
-- **LibraryView**: Displays all tracks with source filtering
-- **PlaylistsView**: Lists all playlists
-- **PlaylistDetailView**: Shows playlist contents with edit/delete
-- **SearchView**: Search interface for tracks
-- **FullPlayerView**: Full-screen player with controls
+#### SwiftUI View Architecture
 
-#### Modal Views
-- **CreatePlaylistView**: Create new playlist
-- **AddTracksToPlaylistView**: Add tracks to existing playlist
+All views follow this pattern:
+```swift
+struct ExampleView: View {
+    @EnvironmentObject var playbackCoordinator: PlaybackCoordinator
+    @EnvironmentObject var playlistManager: PlaylistManager
+    @State private var localState: SomeType
+    
+    var body: some View {
+        // View content
+    }
+    
+    private func performAction() {
+        // Call coordinator or manager methods
+    }
+}
+```
 
-#### Components
-- **TrackRowView**: Reusable track list item
+**Key Views**:
+
+1. **ContentView**: Main tab container
+2. **LibraryView**: Track list with filtering and search
+3. **PlaylistsView**: Playlist grid/list
+4. **PlaylistDetailView**: Individual playlist with edit/delete
+5. **CreatePlaylistView**: Playlist creation form
+6. **AddTracksToPlaylistView**: Track selection for playlist
+7. **SearchView**: Global search interface
+8. **FullPlayerView**: Full-screen player with artwork
+9. **SettingsView**: App settings and Spotify connection
+10. **SpotifyAuthView**: Spotify OAuth UI
+11. **SpotifyConnectionStatusView**: Connection status indicator
+
+**Reusable Components**:
+- **TrackRowView**: Standard track list item
 - **MiniPlayerView**: Persistent mini player bar
 
 ### 5. Utilities
 
-#### Constants.swift
-- App-wide constants
-- Configuration values
-- Spotify credentials
-- iCloud settings
-- Audio formats
-- UI dimensions
+#### Constants.swift - Configuration
 
-#### Extensions.swift
-- TimeInterval formatting
-- Array helpers for tracks
-- View modifiers
-- Color utilities
+Centralized configuration:
+```swift
+enum Spotify {
+    static let clientID = "..."
+    static let redirectURI = "muze://callback"
+    static let scopes = [...]
+}
 
-#### Logger.swift
-- Centralized logging using OSLog
-- Category-based logging
-- Convenience methods for different log levels
+enum iCloud {
+    static let containerIdentifier: String? = nil
+    static let musicFolderName = "Muze/Music"
+    static let autoSyncOnLaunch = true
+}
+
+enum Audio {
+    static let supportedLocalFormats = ["mp3", "m4a", ...]
+}
+```
+
+#### Extensions.swift - Swift Extensions
+
+Useful extensions:
+```swift
+extension TimeInterval {
+    var formattedTime: String  // "3:45"
+}
+
+extension Array where Element == Track {
+    func filtered(by source: TrackSource?) -> [Track]
+    func sorted(by option: SortOption) -> [Track]
+}
+```
+
+#### Logger.swift - Centralized Logging
+
+OSLog-based logging:
+```swift
+import OSLog
+
+struct Logger {
+    static func log(_ message: String, category: String = "General") {
+        os_log("%{public}@", log: OSLog(subsystem: "com.muze.app", category: category), message)
+    }
+}
+```
 
 ---
 
 ## Data Flow
 
-### Playback Flow Example
+### Playback Flow
 
 ```
 1. User taps track in LibraryView
    ↓
-2. View calls playbackCoordinator.playTracks(...)
+2. View calls: playbackCoordinator.playTracks([track], startingAt: 0)
    ↓
 3. PlaybackCoordinator:
-   - Determines track source
-   - Stops current playback
-   - Routes to appropriate service
+   - Updates playback queue
+   - Sets currentTrack
+   - Calls playCurrentTrack()
    ↓
-4a. LocalAudioService.play(url:)    OR    4b. SpotifyService.play(spotifyURI:)
-   - Checks if iCloud file                - Connects to Spotify
-   - Downloads if needed                  - Sends play command
-   ↓                                       ↓
-5. Service starts playback and sends callbacks
+4. playCurrentTrack() checks track.source:
+   
+   4a. Local Track:                    4b. Spotify Track:
+       - Get file URL                      - Get Spotify URI
+       - Check if downloaded               - Ensure connected
+       - Download if needed                - Send play command
+       - localAudioService.play()          - spotifyService.play()
+       ↓                                   ↓
+   5a. LocalAudioService:              5b. SpotifyService:
+       - Create AVAudioPlayer              - Connect App Remote
+       - Configure audio session           - Queue track
+       - Start playback                    - Start playback
+       - Send time updates                 - Subscribe to updates
+       ↓                                   ↓
+6. Service sends callbacks to PlaybackCoordinator
+   - Updates currentTime
+   - Updates duration
+   - Updates isPlaying
    ↓
-6. PlaybackCoordinator updates @Published properties
+7. PlaybackCoordinator publishes changes via @Published
    ↓
-7. SwiftUI views automatically update
+8. Views automatically update (SwiftUI observes)
+   - MiniPlayerView updates
+   - FullPlayerView updates
+   - Progress bars animate
 ```
 
 ### iCloud Sync Flow
 
 ```
-1. User adds file to iCloud Drive/Muze/Music/
+1. App launches or user taps sync button
    ↓
-2. NSMetadataQuery detects new file
+2. PlaylistManager.syncWithiCloudDrive() called
    ↓
-3. iCloudDriveManager triggers callback
+3. iCloudDriveManager.scanForAudioFiles()
+   - Uses NSMetadataQuery or FileManager
+   - Finds all audio files recursively
+   - Returns array of URLs
    ↓
-4. PlaylistManager.syncWithiCloudDrive() called
+4. For each URL:
+   a. Check if already imported (URL-based deduplication)
+   b. Extract metadata with AVAsset
+   c. Create Track object
+   d. Add to PlaylistManager
    ↓
-5. Metadata extracted from file
+5. PlaylistManager publishes update
    ↓
-6. Track created and added to library
-   ↓
-7. UI updates automatically
+6. LibraryView automatically refreshes
 ```
 
-### Playlist Management Flow
+### Spotify Import Flow
 
 ```
-1. User creates playlist in PlaylistsView
+1. User taps "Import Liked Songs"
    ↓
-2. View presents CreatePlaylistView
+2. SpotifyAuthView calls: spotifyWebAPI.getAllSavedTracks()
    ↓
-3. On save, calls playlistManager.createPlaylist(...)
+3. SpotifyWebAPI:
+   - Gets access token from SpotifyAuthManager
+   - Makes paginated requests (50 tracks each)
+   - Converts JSON to Track objects
+   - Calls progress callback
    ↓
-4. PlaylistManager:
-   - Creates Playlist model
-   - Updates @Published playlists array
-   - Persists to storage
+4. For each track:
+   a. PlaylistManager.importSpotifyTrack(track)
+   b. Check for duplicates (Spotify URI)
+   c. Insert into ModelContext
+   d. Save with SwiftData
    ↓
-5. SwiftUI views automatically refresh
+5. UI updates with progress
+   - "Importing 45/200..."
+   ↓
+6. Import completes
+   - All tracks in library
+   - Ready to play
 ```
 
 ---
@@ -402,309 +720,325 @@ private func saveData()  // Uses ModelContext.save()
 ## Key Design Decisions
 
 ### 1. UUID-Based Track References
-Playlists store track UUIDs, not Track objects.
 
-**Benefits**:
-- Memory efficiency
-- Easier persistence
-- Same track in multiple playlists
-- Deduplication
+**Decision**: Playlists store track UUIDs, not Track objects.
 
-### 2. Coordinator Pattern
-`PlaybackCoordinator` abstracts complexity from views.
-
-**Benefits**:
-- Single source of truth
-- Easier testing
-- Cleaner views
-- Centralized business logic
-
-### 3. Source-Agnostic Track Model
-Single `Track` model for all sources.
-
-**Benefits**:
-- Unified interface
-- Simplified code
-- Mixed-source playlists work seamlessly
-- Easy to add new sources
-
-### 4. Service Separation
-Clear separation between local, Spotify, and iCloud services.
-
-**Benefits**:
-- Modular design
-- Testable components
-- Easier to maintain
-- Can mock services for testing
-
-### 5. SwiftUI + Combine
-Modern reactive approach.
-
-**Benefits**:
-- Automatic UI updates
-- Less boilerplate code
-- Better performance
-- Native to Apple platforms
-
-### 6. On-Demand Downloads
-iCloud files download only when needed.
-
-**Benefits**:
-- Saves device storage
-- Faster app launch
-- Better user experience
-- Efficient bandwidth usage
-
-### 7. SwiftData for Persistence
-Using SwiftData instead of Core Data for modern persistence.
-
-**Benefits**:
-- iOS 17+ native framework
-- Type-safe queries with FetchDescriptor
-- Automatic change tracking
-- Less boilerplate than Core Data
-- Swift-first API design
-- @Model macro simplicity
+**Rationale**:
+- Memory efficiency: Don't duplicate track objects
+- Easier persistence: Simple array of UUIDs
+- Shared tracks: Same track in multiple playlists
+- Deduplication: Same UUID = same track
 
 **Implementation**:
-- Track and Playlist as @Model classes
-- ModelContainer in app initialization
-- ModelContext injected to managers
-- Automatic save/load functionality
+```swift
+class Playlist {
+    var trackIDs: [UUID]  // Not [Track]
+}
+
+// Lookup tracks from IDs:
+let tracks = trackIDs.compactMap { id in
+    playlistManager.tracks.first { $0.id == id }
+}
+```
+
+### 2. Coordinator Pattern
+
+**Decision**: PlaybackCoordinator manages all playback state.
+
+**Rationale**:
+- Single source of truth
+- Centralized business logic
+- Easier testing (mock coordinator)
+- Views stay simple
+
+**Benefits**:
+- No state duplication across views
+- Complex logic isolated
+- Service switching transparent to views
+
+### 3. Source-Agnostic Track Model
+
+**Decision**: Single Track model for all sources.
+
+**Rationale**:
+- Unified interface across app
+- Mixed playlists work naturally
+- Simplified view code
+- Easy to add new sources
+
+**Alternative Considered**: Separate LocalTrack and SpotifyTrack classes.
+**Rejected**: Requires complex type handling, duplicate code.
+
+### 4. Service Layer Separation
+
+**Decision**: Clear separation between services.
+
+**Rationale**:
+- Modular design
+- Independent testing
+- Can mock services
+- Easy to replace implementations
+
+**Example**: Could swap Spotify SDK for different API without changing coordinator.
+
+### 5. SwiftUI + Combine
+
+**Decision**: Use SwiftUI with ObservableObject pattern.
+
+**Rationale**:
+- Native to iOS
+- Automatic UI updates
+- Less boilerplate than UIKit
+- Better performance with reactive updates
+
+### 6. On-Demand Downloads
+
+**Decision**: iCloud files download only when needed.
+
+**Rationale**:
+- Saves device storage
+- Faster app launch
+- Better battery life
+- Still feels instant (downloads fast)
+
+**Implementation**:
+```swift
+// Before playing local track:
+if !iCloudManager.isFileDownloaded(url) {
+    try await iCloudManager.downloadFileIfNeeded(url)
+    // Show progress...
+}
+// Then play
+```
+
+### 7. SwiftData for Persistence
+
+**Decision**: Use SwiftData instead of Core Data.
+
+**Rationale**:
+- iOS 17+ native framework
+- Less boilerplate code
+- Type-safe queries with FetchDescriptor
+- @Model macro simplicity
+- Automatic change tracking
+- Modern Swift-first API
+
+**Implementation**:
+```swift
+// Model definition:
+@Model class Track {
+    var title: String
+    // ...
+}
+
+// Querying:
+let descriptor = FetchDescriptor<Track>()
+let tracks = try modelContext.fetch(descriptor)
+
+// Saving:
+modelContext.insert(track)
+try modelContext.save()
+```
+
+### 8. Local Storage Fallback
+
+**Decision**: Automatically fallback to local storage when iCloud unavailable.
+
+**Rationale**:
+- Works with free developer accounts
+- Testing without iCloud entitlement
+- Better user experience (app always works)
+- Graceful degradation
+
+**Implementation**:
+```swift
+let iCloudURL = FileManager.default.url(forUbiquityContainerIdentifier: nil)
+if let iCloudURL = iCloudURL {
+    // Use iCloud
+    self.usingLocalStorage = false
+} else {
+    // Use local Documents directory
+    self.usingLocalStorage = true
+    Logger.log("Using local storage fallback")
+}
+```
+
+### 9. File Sharing Enabled
+
+**Decision**: Enable UIFileSharingEnabled for Files app access.
+
+**Rationale**:
+- Easy music import without computer
+- Better user experience
+- Works on device without iCloud
+- Standard iOS feature
 
 ---
 
 ## Implementation Roadmap
 
-### Phase 1: Xcode Project Setup ✅ COMPLETE
+### Phase 1: Foundation ✅ COMPLETE
 
-- [x] Create Xcode project structure
-- [x] Import source files
-- [x] Configure capabilities
-- [x] Set up build system
+**Completed**:
+- [x] Xcode project structure
+- [x] All Swift source files created
+- [x] Basic model definitions
+- [x] Service interfaces
+- [x] SwiftUI views structure
+- [x] Build system (XcodeGen + Makefile)
 
-### Phase 2: Local Audio & iCloud Implementation ✅ COMPLETE
+**Deliverable**: Buildable app skeleton
 
+### Phase 2: Local Audio & iCloud ✅ COMPLETE
+
+**Completed**:
 - [x] LocalAudioService with AVFoundation
-- [x] iCloud Drive integration
-- [x] On-demand file downloading
-- [x] Metadata extraction
-- [x] File monitoring (NSMetadataQuery)
-- [x] Basic playback controls (play, pause, seek, stop)
-- [x] PlaybackCoordinator with service callbacks
-- [x] Queue management integration
-- [x] Download status tracking
-- [x] Audio session configuration
+- [x] AVAudioPlayer integration
+- [x] Basic playback controls (play, pause, seek)
+- [x] iCloudDriveManager implementation
+- [x] File scanning and discovery
+- [x] On-demand downloading
+- [x] Download progress tracking
+- [x] Metadata extraction with AVAsset
+- [x] NSMetadataQuery for file monitoring
+- [x] PlaybackCoordinator integration
+- [x] Queue management
+- [x] Local storage fallback
 
-**What Works Now**:
-- ✅ Full local audio playback with AVAudioPlayer
-- ✅ Automatic iCloud Drive file discovery
-- ✅ On-demand file downloads before playback
-- ✅ Metadata extraction (title, artist, album, duration, genre)
+**What Works**:
+- ✅ Full local audio playback
+- ✅ Automatic iCloud file discovery
+- ✅ On-demand file downloads
+- ✅ Metadata extraction (title, artist, album, etc.)
 - ✅ Track navigation with queue
-- ✅ Playback state management
+- ✅ Works without iCloud (local storage)
 
-**Optional Enhancements** (can be added later):
-- [ ] UI for manual file import via document picker
-- [ ] Artwork extraction and caching
-- [ ] Download progress UI indicators
-- [ ] iCloud sync status badges on tracks
+**Technical Achievement**: 
+- AVAudioPlayer with iCloud integration
+- Seamless download before playback
+- Rich metadata from audio files
 
 ### Phase 3: Data Persistence ✅ COMPLETE
 
-**Implemented with SwiftData**:
+**Completed**:
+- [x] SwiftData @Model conversion
+- [x] Track and Playlist as @Model classes
+- [x] ModelContainer initialization
+- [x] ModelContext integration
+- [x] FetchDescriptor queries
+- [x] CRUD operations with SwiftData
+- [x] Automatic save/load functionality
+- [x] All views updated for SwiftData
+
+**Implementation Details**:
 
 ```swift
-// Track Model - @Model class
+// Track Model
 @Model
 class Track {
     @Attribute(.unique) var id: UUID
     var title: String
     var artist: String
-    var album: String?
-    var duration: TimeInterval
-    var sourceRawValue: String  // Enum stored as String
-    
-    // URLs stored as Strings for SwiftData compatibility
+    var sourceRawValue: String
+    // URLs as Strings for SwiftData
     var localFileURLString: String?
-    var artworkURLString: String?
-    
-    // Computed properties for convenience
-    var source: TrackSource { ... }
-    var localFileURL: URL? { ... }
-    var artworkURL: URL? { ... }
+    var spotifyURI: String?
 }
 
-// Playlist Model - @Model class
+// Playlist Model
 @Model
 class Playlist {
     @Attribute(.unique) var id: UUID
     var name: String
-    var playlistDescription: String?  // Renamed from 'description'
-    var trackIDs: [UUID]  // Track relationships
-    var artworkURLString: String?
+    var trackIDs: [UUID]
     var dateCreated: Date
     var dateModified: Date
 }
 
-// MuzeApp - SwiftData Container Setup
+// App Setup
 @main
 struct MuzeApp: App {
     let modelContainer: ModelContainer
     
     init() {
         let schema = Schema([Track.self, Playlist.self])
-        let config = ModelConfiguration(isStoredInMemoryOnly: false)
-        modelContainer = try! ModelContainer(for: schema, configurations: [config])
-    }
-    
-    var body: some Scene {
-        WindowGroup {
-            ContentView()
-        }
-        .modelContainer(modelContainer)
+        modelContainer = try! ModelContainer(for: schema)
     }
 }
 
-// PlaylistManager - Uses ModelContext
-class PlaylistManager: ObservableObject {
-    private let modelContext: ModelContext
-    
-    func loadData() {
-        let trackDescriptor = FetchDescriptor<Track>()
-        tracks = try! modelContext.fetch(trackDescriptor)
-        
-        let playlistDescriptor = FetchDescriptor<Playlist>()
-        playlists = try! modelContext.fetch(playlistDescriptor)
-    }
-    
-    func saveData() {
-        try! modelContext.save()
-    }
-}
+// Usage
+let descriptor = FetchDescriptor<Track>()
+let tracks = try! modelContext.fetch(descriptor)
 ```
 
-**What Was Implemented**:
-
-✅ **SwiftData Models**
-- Track converted to `@Model` class
-- Playlist converted to `@Model` class
-- UUID marked as `@Attribute(.unique)`
-- URLs stored as Strings (SwiftData compatible)
-- Enums stored as raw String values
-
-✅ **Persistence Layer**
-- ModelContainer initialized in `MuzeApp`
-- ModelContext injected into `PlaylistManager`
-- FetchDescriptor for type-safe queries
-- Automatic save/load functionality
-
-✅ **Data Operations**
-- Create: `modelContext.insert()` + `modelContext.save()`
-- Read: `FetchDescriptor` + `modelContext.fetch()`
-- Update: Modify properties + `modelContext.save()`
-- Delete: `modelContext.delete()` + `modelContext.save()`
-
-✅ **Integration**
-- All views updated with SwiftData imports
-- Preview code with in-memory containers
-- Environment injection throughout app
-- iCloud Drive sync preserved
-
-**Benefits**:
-- 💾 Automatic persistence to disk
-- 🔄 Zero manual save/load code needed
-- 📱 iOS 17+ native framework
+**What Works**:
+- 💾 Automatic data persistence
+- 🔄 Tracks and playlists saved automatically
+- 📱 Data survives app restarts
 - 🛡️ Type-safe queries
 - ⚡ Optimized performance
 
-**Files Modified**:
-- `Track.swift` - @Model class implementation
-- `Playlist.swift` - @Model class implementation
-- `MuzeApp.swift` - Container initialization
-- `PlaylistManager.swift` - ModelContext integration
-- 7 view files - SwiftData imports and previews
-
-**Tasks**:
-- [x] Choose persistence layer (SwiftData selected)
-- [x] Implement save/load for playlists
-- [x] Cache track metadata
-- [x] Store user preferences (via SwiftData)
-- [ ] Implement data migration (not needed for initial release)
-
 ### Phase 4: Spotify Integration ✅ COMPLETE
 
-Spotify integration is now fully functional with liked songs import and playback control!
+**Completed**:
 
-#### 4.1 Spotify SDK Setup ✅
+#### 4.1 SDK Setup ✅
+- [x] Spotify iOS SDK dependency (SPM)
+- [x] Package.swift configuration
+- [x] Constants for credentials
 
-- [x] Added Spotify iOS SDK dependency (v2.1.6)
-- [x] Configured Package.swift with SpotifyiOS framework
-- [x] Set up Constants for Client ID and scopes
+#### 4.2 Authentication ✅
+- [x] SpotifyAuthManager implementation
+- [x] OAuth 2.0 with PKCE flow
+- [x] Token storage (UserDefaults)
+- [x] Automatic token refresh
+- [x] Session management
+- [x] SpotifyAuthView UI
 
-#### 4.2 Authentication Flow ✅
+#### 4.3 App Remote ✅
+- [x] SpotifyService implementation
+- [x] App Remote connection
+- [x] Playback control (play, pause, seek, skip)
+- [x] Player state subscription
+- [x] Real-time position updates
+- [x] Shuffle and repeat control
 
-**Implemented:**
-- `SpotifyAuthManager`: Full OAuth 2.0 flow with PKCE
-- Token storage and automatic refresh
-- Session management with UserDefaults
-- Auto-refresh timer before expiration
-
-#### 4.3 Spotify App Remote ✅
-
-**Implemented:**
-- `SpotifyService`: Complete integration with Spotify iOS SDK
-- App Remote connection management
-- Playback control (play, pause, resume, seek, skip)
-- Shuffle and repeat mode control
-- Player state subscription
-- Real-time time updates
-
-#### 4.4 Web API Integration ✅
-
-**Implemented:**
-- `SpotifyWebAPI`: Full REST API client
-- Search functionality (tracks, albums)
-- User's saved/liked tracks retrieval with pagination
-- Playlist fetching
-- Track metadata conversion
+#### 4.4 Web API ✅
+- [x] SpotifyWebAPI client
+- [x] RESTful API integration
+- [x] Search functionality
+- [x] User library access
+- [x] Pagination handling
 
 #### 4.5 Import Functionality ✅
+- [x] Import liked songs
+- [x] Progress tracking
+- [x] Duplicate detection
+- [x] Large library support (1000+ tracks)
+- [x] UI with progress indicator
 
-**Implemented:**
-- Import all Spotify liked songs with progress tracking
-- Automatic pagination for large libraries (handles 1000+ tracks)
-- Duplicate detection (skips already imported tracks)
-- Progress callback for UI updates
-- Conversion to unified Track model
+#### 4.6 Integration ✅
+- [x] PlaybackCoordinator routing
+- [x] Mixed-source playback
+- [x] Settings view integration
+- [x] Connection status display
 
-#### 4.6 UI Integration ✅
-
-**Implemented:**
-- `SpotifyAuthView`: Complete authentication UI with Safari login
-- Import progress UI with real-time updates
-- Settings integration with connection status
-- Success/error messaging
-
-**What Works Now**:
-- ✅ OAuth authentication with Spotify
-- ✅ Import all liked songs from Spotify
-- ✅ Play Spotify tracks through Spotify app
-- ✅ Full playback control (play, pause, seek, skip)
-- ✅ Unified library with Spotify and local tracks
+**What Works**:
+- ✅ Full OAuth authentication
+- ✅ Import all liked songs (with progress)
+- ✅ Play Spotify tracks via App Remote
+- ✅ Unified library (local + Spotify)
 - ✅ Mixed-source playlists
 - ✅ Automatic token refresh
-- ✅ Progress tracking during import
 
-**Tasks**:
-- [x] Set up Spotify Developer account documentation
-- [x] Integrate Spotify iOS SDK
-- [x] Implement OAuth authentication
-- [x] Implement playback control
-- [x] Import user's liked songs
-- [x] Create comprehensive setup guide
+**Technical Achievement**:
+- Complete Spotify integration
+- Seamless source switching
+- Unified user experience
 
-### Phase 5: Background Playback & Lock Screen ⏳ PLANNED
+### Phase 5: Background Playback ⏳ NEXT PRIORITY
+
+**Goals**: Enable background audio and lock screen controls
 
 #### 5.1 Audio Session Configuration
 
@@ -718,15 +1052,28 @@ try audioSession.setActive(true)
 #### 5.2 Now Playing Info
 
 ```swift
-// Add to PlaybackCoordinator
+// In PlaybackCoordinator
 import MediaPlayer
 
 private func updateNowPlayingInfo() {
     var nowPlayingInfo = [String: Any]()
     nowPlayingInfo[MPMediaItemPropertyTitle] = currentTrack?.title
     nowPlayingInfo[MPMediaItemPropertyArtist] = currentTrack?.artist
+    nowPlayingInfo[MPMediaItemPropertyAlbumTitle] = currentTrack?.album
     nowPlayingInfo[MPMediaItemPropertyPlaybackDuration] = duration
     nowPlayingInfo[MPNowPlayingInfoPropertyElapsedPlaybackTime] = currentTime
+    nowPlayingInfo[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
+    
+    if let artworkURL = currentTrack?.artworkURL {
+        // Load artwork asynchronously
+        Task {
+            if let image = await loadArtwork(from: artworkURL) {
+                let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+                nowPlayingInfo[MPMediaItemPropertyArtwork] = artwork
+                MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
+            }
+        }
+    }
     
     MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
 }
@@ -735,7 +1082,7 @@ private func updateNowPlayingInfo() {
 #### 5.3 Remote Command Center
 
 ```swift
-// Add to PlaybackCoordinator
+// In PlaybackCoordinator
 private func setupRemoteCommands() {
     let commandCenter = MPRemoteCommandCenter.shared()
     
@@ -758,280 +1105,461 @@ private func setupRemoteCommands() {
         self?.previous()
         return .success
     }
+    
+    commandCenter.changePlaybackPositionCommand.addTarget { [weak self] event in
+        guard let event = event as? MPChangePlaybackPositionCommandEvent else {
+            return .commandFailed
+        }
+        self?.seek(to: event.positionTime)
+        return .success
+    }
 }
 ```
 
+#### 5.4 Background Mode Capability
+
+Add to `Muze.entitlements`:
+```xml
+<key>UIBackgroundModes</key>
+<array>
+    <string>audio</string>
+</array>
+```
+
 **Tasks**:
-- [ ] Configure audio session for background playback
-- [ ] Implement MPNowPlayingInfoCenter
-- [ ] Add remote command center support
-- [ ] Add lock screen controls
-- [ ] Test background audio
+- [ ] Configure audio session for background
+- [ ] Implement Now Playing Info updates
+- [ ] Add Remote Command Center support
+- [ ] Test background playback
+- [ ] Test lock screen controls
+- [ ] Handle interruptions (calls, alarms)
+- [ ] Test with both local and Spotify
+
+**Estimated Time**: 1-2 weeks
 
 ### Phase 6: Advanced Features ⏳ PLANNED
 
-#### 6.1 Crossfade
+**Goals**: Polish and advanced functionality
+
+#### 6.1 Artwork Management
+
+- [ ] Extract artwork from audio files
+- [ ] Cache artwork images
+- [ ] Download Spotify artwork
+- [ ] Generate placeholder artwork
+- [ ] Artwork for playlists
+
+#### 6.2 Crossfade
 
 ```swift
 // Implement in PlaybackCoordinator
-- Detect upcoming track end
-- Start preloading next track
-- Fade out current, fade in next
-- Configurable fade duration
+private func handleTrackEnding() {
+    // Detect track near end (last 5 seconds)
+    if duration - currentTime < 5.0 {
+        // Start preloading next track
+        preloadNextTrack()
+        
+        // Fade out current, fade in next
+        crossfadeToNext()
+    }
+}
 ```
 
-#### 6.2 Equalizer
+#### 6.3 Equalizer
 
 ```swift
 // Add AVAudioEngine support
-- Create EQ presets (Rock, Pop, Jazz, etc.)
-- Real-time audio manipulation
-- Persistent EQ settings
-- Custom EQ configuration
+class LocalAudioService {
+    private let audioEngine = AVAudioEngine()
+    private let eqNode = AVAudioUnitEQ()
+    
+    func applyEQPreset(_ preset: EQPreset) {
+        // Configure EQ bands
+        eqNode.bands[0].frequency = 60
+        eqNode.bands[0].gain = preset.bass
+        // ... configure all bands
+    }
+}
 ```
 
-#### 6.3 Social Features
+#### 6.4 Sleep Timer
 
 ```swift
-- Share playlists
-- Export/import playlist files
-- Collaborative playlists
-- Listen history
+class PlaybackCoordinator {
+    private var sleepTimer: Timer?
+    
+    func setSleepTimer(minutes: Int) {
+        sleepTimer?.invalidate()
+        sleepTimer = Timer.scheduledTimer(
+            withTimeInterval: TimeInterval(minutes * 60),
+            repeats: false
+        ) { [weak self] _ in
+            self?.pause()
+            // Fade out
+        }
+    }
+}
 ```
 
-**Tasks**:
-- [ ] Implement crossfade between tracks
-- [ ] Add equalizer with presets
-- [ ] Add sleep timer
-- [ ] Implement playlist sharing
-- [ ] Add lyrics support (future)
+#### 6.5 Social Features
+
+- [ ] Playlist sharing (export/import)
+- [ ] QR code for playlists
+- [ ] Playlist collaboration
+- [ ] Listen history tracking
+
+**Estimated Time**: 2-3 weeks per feature
 
 ### Phase 7: Polish & Testing ⏳ PLANNED
 
 #### 7.1 Error Handling
-- Network connectivity issues
-- Spotify unavailable fallback
-- File not found errors
-- Permission denials
-- iCloud sync failures
+
+- [ ] Network connectivity issues
+- [ ] Spotify unavailable fallback
+- [ ] File not found errors
+- [ ] Permission denied handling
+- [ ] iCloud sync failures
+- [ ] User-friendly error messages
 
 #### 7.2 Performance Optimization
-- Lazy loading for large libraries
-- Image caching
-- Background queue operations
-- Memory management
-- Reduce app launch time
+
+- [ ] Lazy loading for large libraries
+- [ ] Image caching and optimization
+- [ ] Background queue operations
+- [ ] Memory management review
+- [ ] Reduce app launch time
+- [ ] Profile with Instruments
 
 #### 7.3 UI/UX Improvements
-- Animations and transitions
-- Loading states
-- Error states with retry
-- Empty states
-- Accessibility improvements
+
+- [ ] Smooth animations and transitions
+- [ ] Loading states for all operations
+- [ ] Error states with retry options
+- [ ] Empty states with helpful guidance
+- [ ] Accessibility improvements (VoiceOver)
+- [ ] Dynamic Type support
+- [ ] Haptic feedback
 
 #### 7.4 Testing
+
 ```swift
 // Unit Tests
-- PlaybackQueue logic
-- PlaylistManager operations
-- Track model validation
-- iCloudDriveManager operations
+- PlaybackQueue logic tests
+- PlaylistManager operations tests
+- Track model validation tests
+- iCloudDriveManager operations tests
 
 // Integration Tests
 - PlaybackCoordinator + Services
 - PlaylistManager persistence
 - iCloud sync flow
+- Spotify authentication flow
 
 // UI Tests
 - Navigation flows
 - Playback controls
 - Playlist creation/editing
+- Search functionality
 ```
 
-**Tasks**:
-- [ ] Add comprehensive error handling
-- [ ] Optimize performance for large libraries
-- [ ] Add animations and transitions
-- [ ] Write unit tests
-- [ ] Write integration tests
-- [ ] Write UI tests
-- [ ] Test on physical devices
-- [ ] Accessibility testing
-
-### Development Timeline
-
-**Week 1**: Foundation ✅ DONE
-**Week 2**: Local Audio + iCloud ✅ DONE ✨  
-**Week 3**: Persistence ✅ DONE
-**Week 4**: Spotify Integration ✅ DONE 🎵
-**Week 5**: Background Playback 🚧 NEXT PRIORITY
-**Week 6+**: Advanced Features & Testing ⏳ PLANNED
-
-### 🎉 Recent Milestones
-
-**October 13, 2025** - Spotify Integration Complete!
-- ✅ Full Spotify OAuth authentication
-- ✅ Import all liked songs from Spotify
-- ✅ Spotify playback with App Remote
-- ✅ Unified library with local + Spotify tracks
-- ✅ Mixed-source playlists
-- 🎵 **You can now enjoy Spotify and local music together!**
-
-**October 8, 2025** - Local Playback & iCloud Complete!
-- ✅ Full local audio playback working
-- ✅ iCloud Drive auto-discovery implemented
-- ✅ On-demand file downloading functional
-- ✅ Metadata extraction complete
-- ✅ PlaybackCoordinator orchestrating services
+**Estimated Time**: 2-3 weeks
 
 ---
 
 ## Extension Points
 
-The architecture is designed to be easily extended:
+The architecture is designed for easy extension:
 
 ### Adding New Track Sources
 
-1. Add new case to `TrackSource` enum
-2. Create new service (e.g., `AppleMusicService`)
-3. Add routing logic in `PlaybackCoordinator`
-4. Update `Track` model with source-specific identifier
+Example: Adding Apple Music support
 
-Example:
+1. **Add to TrackSource enum**:
 ```swift
-// 1. Add to TrackSource.swift
-enum TrackSource {
+enum TrackSource: String {
     case local
     case spotify
     case appleMusic  // New!
 }
+```
 
-// 2. Create AppleMusicService.swift
+2. **Create service**:
+```swift
 class AppleMusicService {
-    func play(musicID: String) { ... }
+    func play(musicID: String) async throws {
+        // Implement Apple Music playback
+    }
 }
+```
 
-// 3. Update PlaybackCoordinator.swift
-func playTrack(_ track: Track) {
-    switch track.source {
-    case .local: localAudioService.play(...)
-    case .spotify: spotifyService.play(...)
-    case .appleMusic: appleMusicService.play(...)  // New!
+3. **Update Track model**:
+```swift
+@Model
+class Track {
+    var appleMusicID: String?  // New property
+}
+```
+
+4. **Add routing in coordinator**:
+```swift
+func playCurrentTrack() {
+    switch currentTrack?.source {
+    case .local: // ...
+    case .spotify: // ...
+    case .appleMusic: // New!
+        Task {
+            try await appleMusicService.play(
+                musicID: currentTrack!.appleMusicID!
+            )
+        }
     }
 }
 ```
 
 ### Adding New Features
 
-- **Lyrics**: Add `lyrics` property to `Track`, create `LyricsView`
-- **Radio Mode**: Create `RadioService`, add to `PlaybackCoordinator`
-- **Social Features**: Create `SocialManager`, add sharing methods
-- **Cloud Sync**: Extend `iCloudDriveManager` or create `SyncService`
+#### Lyrics Support
 
----
+1. Add `lyrics` property to Track
+2. Create `LyricsView` to display
+3. Fetch from metadata or API
+4. Show synchronized with playback
 
-## Testing Strategy
+#### Radio Mode
 
-### Unit Tests
+1. Create `RadioService`
+2. Generate similar tracks
+3. Integrate with PlaybackCoordinator
+4. Add UI controls
 
-**Models**:
-```swift
-- Track creation and validation
-- Playlist operations (add, remove, reorder)
-- PlaybackQueue navigation logic
-- Shuffle algorithm correctness
-```
+#### Collaborative Playlists
 
-**Services**:
-```swift
-- LocalAudioService playback control
-- iCloudDriveManager file operations
-- PlaylistManager CRUD operations
-```
-
-**Coordinators**:
-```swift
-- PlaybackCoordinator state management
-- Source switching logic
-- Queue management
-```
-
-### Integration Tests
-
-```swift
-- PlaybackCoordinator + LocalAudioService
-- PlaybackCoordinator + SpotifyService
-- PlaylistManager + iCloudDriveManager
-- Persistence layer integration
-```
-
-### UI Tests
-
-```swift
-- Navigation between tabs
-- Playback controls functionality
-- Playlist creation flow
-- Adding tracks to playlists
-- Search functionality
-```
-
-### Testing Checklist
-
-- [ ] Unit tests for all models
-- [ ] Service layer tests with mocks
-- [ ] Coordinator logic tests
-- [ ] Integration tests for playback flow
-- [ ] UI tests for major features
-- [ ] Test with large libraries (1000+ tracks)
-- [ ] Test iCloud sync scenarios
-- [ ] Test offline mode
-- [ ] Test background playback
-- [ ] Test on various iOS versions
+1. Add `collaborators` to Playlist
+2. Create sync service (CloudKit)
+3. Handle conflicts
+4. Add sharing UI
 
 ---
 
 ## Code Style Guidelines
 
 ### File Organization
-- Group by feature/layer, not file type
-- Use MARK comments to organize code sections
-- Keep files focused on single responsibility
 
-### Naming Conventions
-- Clear, descriptive names (e.g., `PlaybackCoordinator`, not `PC`)
-- Use verb phrases for methods (`playTrack`, `addToPlaylist`)
-- Use noun phrases for properties (`currentTrack`, `isPlaying`)
-
-### Comments
-- Use comments for "why", not "what"
-- Add documentation comments for public APIs
-- Explain complex algorithms or business logic
-
-### Code Organization
 ```swift
 // MARK: - Properties
 // MARK: - Initialization
 // MARK: - Public Methods
 // MARK: - Private Methods
-// MARK: - Callbacks
+// MARK: - Callbacks/Delegates
+```
+
+### Naming Conventions
+
+- **Classes/Structs**: `PascalCase` (e.g., `PlaybackCoordinator`)
+- **Functions**: `camelCase` with verb (e.g., `playTrack()`)
+- **Properties**: `camelCase` with noun (e.g., `currentTrack`)
+- **Constants**: `camelCase` (e.g., `clientID`)
+- **Enums**: `PascalCase` with singular (e.g., `TrackSource`)
+
+### Comments
+
+```swift
+// Use comments for "why", not "what"
+
+/// Documentation comment for public APIs
+/// - Parameter track: The track to play
+/// - Returns: True if playback started successfully
+func play(track: Track) -> Bool {
+    // Good: Explains reasoning
+    // Spotify requires connection before playback
+    guard spotifyService.isConnected else {
+        return false
+    }
+}
 ```
 
 ### Access Control
-- Default to `private`, expose only what's needed
+
+- Default to `private`
 - Use `internal` for same-module access
-- Use `public` sparingly
+- Use `public` only for external APIs
+- Use `fileprivate` sparingly
 
 ### Error Handling
-- Use `Result` types for async operations
-- Provide user-friendly error messages
-- Log errors with context
+
+```swift
+// Use Result types for async operations
+func loadTrack() async -> Result<Track, Error> {
+    // ...
+}
+
+// Use throws for sync operations
+func validateTrack() throws {
+    // ...
+}
+
+// Provide user-friendly error messages
+enum MuzeError: LocalizedError {
+    case fileNotFound(URL)
+    case spotifyNotConnected
+    
+    var errorDescription: String? {
+        switch self {
+        case .fileNotFound(let url):
+            return "Could not find audio file: \(url.lastPathComponent)"
+        case .spotifyNotConnected:
+            return "Please connect to Spotify first"
+        }
+    }
+}
+```
 
 ### Swift Best Practices
-- Prefer `let` over `var`
-- Use guard for early returns
-- Leverage Swift's type system
-- Use extensions to organize code
-- Prefer composition over inheritance
+
+```swift
+// Prefer let over var
+let constantValue = 42
+
+// Use guard for early returns
+guard let track = currentTrack else {
+    Logger.log("No track to play")
+    return
+}
+
+// Leverage type inference
+let tracks = [Track]()  // Not: [Track] = [Track]()
+
+// Use extensions to organize code
+extension PlaybackCoordinator {
+    // MARK: - Queue Management
+    func nextTrack() { }
+    func previousTrack() { }
+}
+
+// Prefer composition over inheritance
+struct Track {
+    let metadata: TrackMetadata  // Composition
+    let source: TrackSource
+}
+```
+
+---
+
+## Development Workflow
+
+### Daily Development
+
+```bash
+# 1. Pull latest changes
+git pull
+
+# 2. Generate project (if structure changed)
+make generate
+
+# 3. Make code changes
+# Edit Swift files in Muze/ directory
+
+# 4. Build and test
+make run
+
+# 5. Check console for logs
+
+# 6. Commit changes
+git add .
+git commit -m "Add feature X"
+```
+
+### Adding New Files
+
+```bash
+# 1. Create Swift file in appropriate directory
+touch Muze/Services/NewService.swift
+
+# 2. Regenerate Xcode project
+make generate
+
+# 3. Build to verify
+make build
+```
+
+### Changing Project Configuration
+
+```bash
+# 1. Edit project.yml
+vim project.yml
+
+# 2. Regenerate project
+make generate
+
+# 3. Verify changes
+make build
+```
+
+### Testing Changes
+
+```bash
+# Unit tests (when implemented)
+make test
+
+# Manual testing on simulator
+make run
+
+# Testing on device
+# Build via Xcode to device
+```
+
+### Version Control Best Practices
+
+**Commit**:
+- All `.swift` source files
+- `project.yml` (XcodeGen config)
+- `Muze.entitlements`
+- `Info.plist`
+- `Package.swift`
+- `Makefile`
+- Documentation (`.md` files)
+- `.gitignore`
+
+**Don't Commit**:
+- `Muze.xcodeproj/` (generated)
+- `build/` (build artifacts)
+- `DerivedData/` (Xcode cache)
+- `.DS_Store` (macOS files)
+- `*.swp` (editor temp files)
+
+### Debugging Tips
+
+1. **Use Logger extensively**:
+```swift
+   Logger.log("Starting playback for: \(track.title)")
+   ```
+
+2. **Check Console.app** for system logs
+
+3. **Set breakpoints** in Xcode
+
+4. **Use lldb** commands:
+   ```
+   po currentTrack
+   expr isPlaying = true
+   ```
+
+5. **Profile with Instruments**:
+   - Time Profiler for performance
+   - Allocations for memory leaks
+   - Network for API calls
+
+### Code Review Checklist
+
+- [ ] Follows naming conventions
+- [ ] Proper error handling
+- [ ] Logging added for debugging
+- [ ] Comments explain "why"
+- [ ] No hardcoded values (use Constants)
+- [ ] Testable code structure
+- [ ] No force unwraps (`!`)
+- [ ] Memory management considered
+- [ ] Accessibility considered
 
 ---
 
@@ -1043,68 +1571,47 @@ func playTrack(_ track: Track) {
 - [Spotify iOS SDK](https://developer.spotify.com/documentation/ios/)
 - [iCloud Design Guide](https://developer.apple.com/icloud/)
 - [Media Player Framework](https://developer.apple.com/documentation/mediaplayer/)
-- [FetchDescriptor](https://developer.apple.com/documentation/swiftdata/fetchdescriptor)
-- [ModelContainer](https://developer.apple.com/documentation/swiftdata/modelcontainer)
+- [XcodeGen Documentation](https://github.com/yonaskolb/XcodeGen)
 
 ---
 
----
+## Current Status
 
-## 🎊 What You Can Do Right Now
+### What's Working Now
 
-Your Muze app is now a **fully functional music player with Spotify integration**! Here's what works:
+You have a **fully functional music player**! 🎉
 
-### ✅ Implemented Features
+✅ **Local Music**:
+- Play audio files from iCloud or local storage
+- Automatic file discovery and import
+- On-demand downloads
+- Rich metadata extraction
 
-#### Local Music
-1. **Add Music**: Drop MP3/M4A/FLAC/etc. files into `iCloud Drive/Muze/Music/`
-2. **Auto-Discovery**: Files are automatically discovered and imported with metadata
-3. **Full Playback**: Play, pause, seek, next, previous controls all working
-4. **Download on Demand**: iCloud files download automatically when played
-5. **Metadata Extraction**: Title, artist, album, duration, genre from files
+✅ **Spotify Integration**:
+- OAuth authentication
+- Import liked songs (with progress)
+- Play Spotify tracks
+- Full playback control
 
-#### Spotify Integration
-6. **Connect to Spotify**: OAuth authentication with Spotify accounts
-7. **Import Liked Songs**: Import all your Spotify liked songs (with progress tracking)
-8. **Spotify Playback**: Play Spotify tracks through the Spotify app
-9. **Unified Library**: Browse both local and Spotify tracks together
+✅ **Organization**:
+- Create and manage playlists
+- Mix local and Spotify tracks
+- Search across library
+- Queue management with shuffle/repeat
 
-#### Playlists & Organization
-10. **Create Playlists**: Organize your music into playlists
-11. **Mixed-Source Playlists**: Combine Spotify and local tracks in the same playlist
-12. **Queue Management**: Shuffle, repeat modes, track navigation
-13. **Data Persistence**: Everything saved with SwiftData
+✅ **Persistence**:
+- All data saved with SwiftData
+- Survives app restarts
+- Efficient storage
 
-### 🎵 Try It Now
+### Next Priority
 
-```bash
-# Build and run
-make run
+**Background Playback** - Enable audio in background and lock screen controls
 
-# Or with Xcode
-open Muze.xcodeproj
-```
-
-### 📊 Current Progress
-
-| Feature | Status |
-|---------|--------|
-| **Architecture** | ✅ Complete |
-| **Local Audio Playback** | ✅ Complete |
-| **iCloud Drive Sync** | ✅ Complete |
-| **Metadata Extraction** | ✅ Complete |
-| **Queue Management** | ✅ Complete |
-| **Data Persistence (SwiftData)** | ✅ Complete |
-| **Spotify Integration** | ✅ Complete |
-| **UI/UX** | ✅ Complete |
-| **Background Playback** | ⏳ Next Priority |
-| **Lock Screen Controls** | ⏳ Planned |
-
-**Overall**: ~85% complete for full-featured MVP
+**Estimated Completion**: 1-2 weeks
 
 ---
 
-**Last Updated**: October 13, 2025  
+**Last Updated**: October 20, 2025  
 **Version**: 1.0.0  
-**Status**: Spotify Integration Complete! 🎵 Next: Background Playback & Lock Screen Controls
-
+**Status**: Core functionality complete! Background playback next! 🎵
